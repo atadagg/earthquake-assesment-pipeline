@@ -1,0 +1,18 @@
+# Deprem Verileri Kategorizasyon Sistemi
+# Python Bağımlılıkları
+
+# Veri işleme
+pandas>=1.5.0
+openpyxl>=3.0.0
+
+# Excel okuma/yazma
+xlrd>=2.0.0
+
+# Opsiyonel: Gelişmiş metin analizi
+# numpy>=1.23.0
+# scikit-learn>=1.1.0
+
+# Opsiyonel: Görselleştirme
+# matplotlib>=3.6.0
+# seaborn>=0.12.0
+

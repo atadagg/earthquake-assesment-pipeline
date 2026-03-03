@@ -1,0 +1,15 @@
+# Deprem Verileri Kategorizasyon - Anahtar Kelimeler
+# Her satırda bir anahtar kelime
+# Toplam 10 anahtar kelime
+
+deprem
+afet
+yardım
+enkaz
+kurtarma
+yıkım
+kayıp
+hastane
+barınak
+koordinasyon
+
