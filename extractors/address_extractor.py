@@ -1,6 +1,7 @@
 import json
 import re
 from collections import defaultdict
+from pathlib import Path
 
 
 class MorphologyHelper:
@@ -187,4 +188,4 @@ class AddressExtractor:
 
 
 # Initialize the data just like the static { loadTurkeyData(...) } block in Java
-AddressExtractor.load_turkey_data("turkiye.json")
+AddressExtractor.load_turkey_data(str(Path(__file__).parent / "turkiye.json"))

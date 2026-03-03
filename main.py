@@ -1,0 +1,407 @@
+"""
+Earthquake Pipeline — Main Orchestrator
+
+Four daemon threads:
+  Detector       polls Ekşi gündem, pushes EarthquakeEvents onto event_queue
+  WorkerManager  spawns/tracks scraper worker subprocesses, reaps dead ones
+  DiffWatcher    polls diff directories for new files, pushes DiffBatches onto process_queue
+  EntryProcessor classifies + extracts entries, writes results to SQLite
+"""
+
+import json
+import logging
+import os
+import queue
+import sqlite3
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Path setup — make all sub-packages importable from repo root
+# ---------------------------------------------------------------------------
+ROOT = Path(__file__).parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "detector"))
+sys.path.insert(0, str(ROOT / "classifiers"))
+sys.path.insert(0, str(ROOT / "classifiers" / "damage"))
+sys.path.insert(0, str(ROOT / "extractors"))
+
+from thread_registry import ThreadRegistry, ThreadStatus
+from earthquake_patterns import is_earthquake_baslik
+from earthquake_detector import fetch_gundem
+from needs_classifier import KeywordClassifier
+from keyword_matcher import KeywordMatcher, KeywordLoader
+from address_extractor import AddressExtractor
+from top_level_classifier import TopLevelClassifier
+
+# ---------------------------------------------------------------------------
+# Paths & config
+# ---------------------------------------------------------------------------
+DATA_DIR         = ROOT / "data"
+LOGS_DIR         = ROOT / "logs"
+SCRAPER_DATA_DIR = DATA_DIR / "scrapers"
+REGISTRY_FILE    = str(DATA_DIR / "thread_registry.json")
+DB_FILE          = str(DATA_DIR / "pipeline.db")
+WORKER_SCRIPT    = str(ROOT / "detector" / "scraper" / "scraper_worker.py")
+
+DETECTOR_INTERVAL = 30   # seconds between gündem polls
+REAP_INTERVAL     = 60   # seconds between worker health checks
+WATCH_INTERVAL    = 10   # seconds between diff directory scans
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(threadName)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(str(LOGS_DIR / "pipeline.log"), encoding="utf-8"),
+    ],
+)
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared inter-thread state
+# ---------------------------------------------------------------------------
+event_queue: queue.Queue   = queue.Queue()   # Detector → WorkerManager
+process_queue: queue.Queue = queue.Queue()   # DiffWatcher → EntryProcessor
+
+worker_handles: dict[str, subprocess.Popen] = {}
+worker_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Data transfer objects
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EarthquakeEvent:
+    earthquake_id: str
+    thread_path: str
+    url: str
+
+
+@dataclass
+class DiffBatch:
+    diff_file: Path
+    thread_path: str
+    earthquake_id: str
+    entries: list
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS entries (
+            entry_id      TEXT PRIMARY KEY,
+            thread_path   TEXT NOT NULL,
+            earthquake_id TEXT NOT NULL,
+            author        TEXT,
+            timestamp     TEXT,
+            content       TEXT,
+            scraped_at    TEXT,
+            first_seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS results (
+            entry_id          TEXT PRIMARY KEY,
+            top_category      TEXT,      -- 'damage' | 'need' | 'other' | NULL = not yet classified
+            need_labels       TEXT,      -- JSON array e.g. ["G","S","B"]
+            damage_keywords   TEXT,      -- JSON array of matched severity keywords
+            extracted_address TEXT,
+            processed_at      TEXT,
+            FOREIGN KEY (entry_id) REFERENCES entries(entry_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_eq_id  ON entries(earthquake_id);
+        CREATE INDEX IF NOT EXISTS idx_top_cat ON results(top_category);
+    """)
+    conn.commit()
+    conn.close()
+    log.info(f"DB ready: {DB_FILE}")
+
+
+# ---------------------------------------------------------------------------
+# Thread 1 — Detector
+# ---------------------------------------------------------------------------
+
+def detector_thread(registry: ThreadRegistry):
+    log.info("Started — polling every %ds", DETECTOR_INTERVAL)
+    while True:
+        try:
+            basliks = fetch_gundem()
+            for baslik in basliks:
+                pattern = is_earthquake_baslik(baslik["title"])
+                if not pattern:
+                    continue
+                earthquake_id = (
+                    f"{pattern['day']}-{pattern['month']}-"
+                    f"{pattern['year']}-{pattern['province']}"
+                )
+                thread_path = baslik["url"].split("?")[0].lstrip("/")
+                if not registry.is_tracked(thread_path):
+                    url = f"https://eksisozluk.com/{thread_path}"
+                    event_queue.put(EarthquakeEvent(earthquake_id, thread_path, url))
+                    log.info("Earthquake detected: %s → %s", earthquake_id, thread_path)
+        except Exception as e:
+            log.error("Detector error: %s", e)
+        time.sleep(DETECTOR_INTERVAL)
+
+
+# ---------------------------------------------------------------------------
+# Thread 2 — Worker Manager
+# ---------------------------------------------------------------------------
+
+def worker_manager_thread(registry: ThreadRegistry):
+    log.info("Started")
+    while True:
+        # Drain the event queue
+        while True:
+            try:
+                event = event_queue.get_nowait()
+                _spawn_worker(event, registry)
+            except queue.Empty:
+                break
+            except Exception as e:
+                log.error("Spawn error: %s", e)
+
+        _reap_workers(registry)
+        time.sleep(REAP_INTERVAL)
+
+
+def _spawn_worker(event: EarthquakeEvent, registry: ThreadRegistry):
+    thread_dir = SCRAPER_DATA_DIR / event.thread_path
+    thread_dir.mkdir(parents=True, exist_ok=True)
+    state_file = str(thread_dir / "state.json")
+    output_dir = str(thread_dir / "diffs")
+
+    registry.register(event.thread_path, event.url, event.earthquake_id, str(thread_dir))
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, WORKER_SCRIPT,
+             event.url, state_file, output_dir, REGISTRY_FILE],
+            stdout=open(thread_dir / "worker.log", "a"),
+            stderr=subprocess.STDOUT,
+        )
+        with worker_lock:
+            worker_handles[event.thread_path] = proc
+        registry.update(event.thread_path, worker_pid=proc.pid)
+        log.info("Spawned worker for %s (PID %d)", event.thread_path, proc.pid)
+    except Exception as e:
+        log.error("Failed to spawn worker for %s: %s", event.thread_path, e)
+        registry.update(event.thread_path, status=ThreadStatus.DEAD)
+
+
+def _reap_workers(registry: ThreadRegistry):
+    with worker_lock:
+        dead = [p for p, proc in worker_handles.items() if proc.poll() is not None]
+    for path in dead:
+        with worker_lock:
+            proc = worker_handles.pop(path)
+        record = registry.get(path)
+        if record and record.status == ThreadStatus.ACTIVE:
+            registry.update(path, status=ThreadStatus.DEAD)
+            log.warning("Worker for %s died unexpectedly (exit %d)", path, proc.returncode)
+        else:
+            log.info("Worker for %s exited cleanly", path)
+
+
+# ---------------------------------------------------------------------------
+# Thread 3 — Diff Watcher
+# ---------------------------------------------------------------------------
+
+def diff_watcher_thread(registry: ThreadRegistry):
+    log.info("Started — scanning every %ds", WATCH_INTERVAL)
+    seen: set[str] = set()
+
+    while True:
+        try:
+            for diff_file in sorted(SCRAPER_DATA_DIR.glob("*/diffs/diff_*.json")):
+                key = str(diff_file)
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    with open(diff_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    new_entries = data.get("new", [])
+                    if not new_entries:
+                        continue
+                    # Path structure: scrapers/<thread_path>/diffs/diff_*.json
+                    thread_path = diff_file.parts[-3]
+                    record = registry.get(thread_path)
+                    earthquake_id = record.earthquake_id if record else "unknown"
+                    process_queue.put(DiffBatch(diff_file, thread_path, earthquake_id, new_entries))
+                    log.info("Queued %d entries from %s", len(new_entries), diff_file.name)
+                except Exception as e:
+                    log.error("Error reading %s: %s", diff_file, e)
+        except Exception as e:
+            log.error("Watcher scan error: %s", e)
+        time.sleep(WATCH_INTERVAL)
+
+
+# ---------------------------------------------------------------------------
+# Thread 4 — Entry Processor
+# ---------------------------------------------------------------------------
+
+def _load_classifiers():
+    # Level 1 — top-level (H / Y / HY / B)
+    top_clf = TopLevelClassifier()
+    try:
+        top_clf.load()
+        log.info("Top-level classifier loaded")
+    except FileNotFoundError:
+        log.warning("Top-level model not found — run: python top_level_classifier.py train <data.xlsx>")
+        top_clf = None
+
+    # Level 2a — needs (K/G/S/B/I/Y/H/U/M/F)
+    needs_clf = KeywordClassifier(
+        keywords_file=str(ROOT / "classifiers" / "category_keywords.txt"),
+        threshold=1,
+    )
+
+    # Level 2b — damage severity keywords
+    damage_keywords = KeywordLoader.load_from_file(str(ROOT / "classifiers" / "damage" / "keywords.txt"))
+    damage_clf = KeywordMatcher(damage_keywords)
+
+    AddressExtractor.load_turkey_data(str(ROOT / "extractors" / "turkiye.json"))
+    log.info("All classifiers and extractor loaded")
+    return top_clf, needs_clf, damage_clf
+
+
+def _classify(entry: dict, top_clf, needs_clf, damage_clf) -> dict:
+    content = entry.get("content", "")
+
+    # -- Level 1: H (damage) | Y (need) | HY (both) | B (other) --
+    top_category = None
+    if top_clf is not None:
+        try:
+            top_category = top_clf.predict(content)
+        except Exception as e:
+            log.error("Top-level classifier error: %s", e)
+
+    # Decide which L2 classifiers to run based on top-level label.
+    # HY → run both. B → run neither. None (model missing) → run both.
+    run_needs  = top_category in ("Y", "HY", None)
+    run_damage = top_category in ("H", "HY", None)
+
+    # -- Level 2a: needs --
+    need_labels = None
+    if run_needs:
+        predictions = needs_clf.predict_single(content)
+        if predictions:
+            need_labels = [p["category"] for p in predictions]
+
+    # -- Level 2b: damage severity --
+    damage_keywords_found = None
+    if run_damage:
+        matched = damage_clf.get_matched_keywords(content)
+        if matched:
+            damage_keywords_found = matched
+
+    # -- Extractor: address (runs on anything that passed L1, skip B) --
+    extracted_address = None
+    if top_category != "B":
+        try:
+            result = AddressExtractor.extract_address(content)
+            if result != "ADDRESS NOT DETECTED":
+                extracted_address = result
+        except Exception:
+            pass
+
+    return {
+        "top_category":    top_category,
+        "need_labels":     json.dumps(need_labels, ensure_ascii=False) if need_labels else None,
+        "damage_keywords": json.dumps(damage_keywords_found, ensure_ascii=False) if damage_keywords_found else None,
+        "extracted_address": extracted_address,
+    }
+
+
+def entry_processor_thread():
+    log.info("Started")
+    top_clf, needs_clf, damage_clf = _load_classifiers()
+    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+
+    while True:
+        try:
+            batch: DiffBatch = process_queue.get(timeout=5)
+        except queue.Empty:
+            continue
+
+        processed = 0
+        for entry in batch.entries:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO entries
+                       (entry_id, thread_path, earthquake_id, author, timestamp, content, scraped_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (entry["id"], batch.thread_path, batch.earthquake_id,
+                     entry.get("author"), entry.get("timestamp"),
+                     entry.get("content"), entry.get("scraped_at")),
+                )
+                result = _classify(entry, top_clf, needs_clf, damage_clf)
+                conn.execute(
+                    """INSERT OR REPLACE INTO results
+                       (entry_id, top_category, need_labels, damage_keywords, extracted_address, processed_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (entry["id"], result["top_category"], result["need_labels"],
+                     result["damage_keywords"], result["extracted_address"],
+                     datetime.now().isoformat()),
+                )
+                conn.commit()
+                processed += 1
+            except Exception as e:
+                log.error("Skipping entry %s: %s", entry.get("id"), e)
+
+        log.info("Processed %d/%d entries from %s",
+                 processed, len(batch.entries), batch.diff_file.name)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    DATA_DIR.mkdir(exist_ok=True)
+    SCRAPER_DATA_DIR.mkdir(exist_ok=True)
+
+    init_db()
+
+    registry = ThreadRegistry(REGISTRY_FILE)
+    log.info("Registry loaded: %d known threads", len(registry.get_all()))
+
+    threads = [
+        threading.Thread(target=detector_thread,       args=(registry,), name="Detector",       daemon=True),
+        threading.Thread(target=worker_manager_thread, args=(registry,), name="WorkerManager",  daemon=True),
+        threading.Thread(target=diff_watcher_thread,   args=(registry,), name="DiffWatcher",    daemon=True),
+        threading.Thread(target=entry_processor_thread,                  name="EntryProcessor", daemon=True),
+    ]
+
+    for t in threads:
+        t.start()
+        log.info("Thread started: %s", t.name)
+
+    log.info("Pipeline running — Ctrl+C to stop")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        log.info("Shutting down")
+
+
+if __name__ == "__main__":
+    main()

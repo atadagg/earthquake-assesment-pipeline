@@ -13,6 +13,10 @@ import subprocess
 from pathlib import Path
 from earthquake_patterns import is_earthquake_baslik
 
+# thread_registry.py lives at the repo root (one level up from detector/).
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from thread_registry import ThreadRegistry, ThreadStatus
+
 # Configuration
 GUNDEM_URL = "https://eksisozluk.com/basliklar/gundem"
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
@@ -24,6 +28,7 @@ DATA_DIR = "data"
 LOGS_DIR = "logs"
 SCRAPER_DATA_DIR = os.path.join(DATA_DIR, "scrapers")
 DETECTED_EVENTS_FILE = os.path.join(DATA_DIR, "detected_events.jsonl")
+REGISTRY_FILE = os.path.join(DATA_DIR, "thread_registry.json")
 GUNDEM_LOG_FILE = os.path.join(LOGS_DIR, "gundem_monitor.log")
 SCRAPER_WORKER_PATH = os.path.join("scraper", "scraper_worker.py")
 
@@ -46,55 +51,56 @@ def log_message(message: str, to_file: bool = True):
             f.write(log_line + '\n')
 
 
-def spawn_scraper_worker(url: str, url_path: str):
+def spawn_scraper_worker(url: str, url_path: str, earthquake_id: str, registry: ThreadRegistry):
     """
-    Spawn a scraper worker process for the given URL.
-    Worker will run independently and shut down when entry count reaches 0.
+    Register the thread in the central registry and spawn a scraper worker.
 
     Args:
-        url: Full URL (e.g. https://eksisozluk.com/deprem--123456)
-        url_path: URL path after .com/ (e.g. deprem--123456)
+        url:           Full URL (e.g. https://eksisozluk.com/deprem--123456)
+        url_path:      URL path after .com/ (e.g. deprem--123456)
+        earthquake_id: Identifier for the earthquake event this thread belongs to
+        registry:      Shared ThreadRegistry instance
     """
-    # Use URL path as directory name (e.g. deprem--123456)
-    # Strip leading slash if present
-    dir_name = url_path.lstrip('/')
-    thread_dir = os.path.join(SCRAPER_DATA_DIR, dir_name)
+    thread_path = url_path.lstrip('/')
+    thread_dir = os.path.join(SCRAPER_DATA_DIR, thread_path)
     os.makedirs(thread_dir, exist_ok=True)
 
     state_file = os.path.join(thread_dir, "state.json")
     output_dir = os.path.join(thread_dir, "diffs")
 
-    # Check if a worker is already running for this URL by checking lock file
-    lock_file = f"{state_file}.lock"
-    if os.path.exists(lock_file):
-        log_message(f"⚠️  Worker already running for {dir_name} (lock file exists)")
+    # Registry is the source of truth for whether a worker is already running.
+    if registry.has_active_worker(thread_path):
+        log_message(f"⚠️  Worker already active for {thread_path} (registry)")
         return False
 
+    # Register the thread before spawning so the worker can update it.
+    registry.register(thread_path, url, earthquake_id, thread_dir)
+
     try:
-        # Spawn worker process (fire and forget)
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [
                 sys.executable,
                 SCRAPER_WORKER_PATH,
                 url,
                 state_file,
-                output_dir
+                output_dir,
+                REGISTRY_FILE,   # worker will update registry on lifecycle events
             ],
             stdout=open(os.path.join(thread_dir, "worker.log"), 'a'),
             stderr=subprocess.STDOUT,
-            start_new_session=True  # Detach from parent process
         )
 
-        log_message(f"✓ Spawned scraper worker for {dir_name}")
+        log_message(f"✓ Spawned scraper worker for {thread_path} (PID {proc.pid})")
         log_message(f"   Worker output: {thread_dir}/worker.log")
         return True
 
     except Exception as e:
         log_message(f"❌ Failed to spawn scraper worker: {e}")
+        registry.update(thread_path, status=ThreadStatus.DEAD)
         return False
 
 
-def save_earthquake_event(baslik_data: dict, pattern_match: dict, earthquake_id: str):
+def save_earthquake_event(baslik_data: dict, pattern_match: dict, earthquake_id: str, registry: ThreadRegistry):
     """Save detected earthquake event to file and spawn scraper worker"""
     event = {
         'detected_at': datetime.now().isoformat(),
@@ -114,11 +120,10 @@ def save_earthquake_event(baslik_data: dict, pattern_match: dict, earthquake_id:
     log_message(f"   Entry count: {baslik_data['entry_count']}")
     log_message(f"   Confidence: {pattern_match['confidence']}")
 
-    # Spawn scraper worker to monitor this thread
     # Remove query parameters like ?a=popular before passing to scraper
     clean_url_path = baslik_data['url'].split('?')[0]
     full_url = f"https://eksisozluk.com{clean_url_path}"
-    spawn_scraper_worker(full_url, clean_url_path)
+    spawn_scraper_worker(full_url, clean_url_path, earthquake_id, registry)
 
 
 def fetch_gundem():
@@ -169,6 +174,8 @@ def monitor_earthquakes():
     """Main monitoring loop"""
     setup_directories()
 
+    registry = ThreadRegistry(REGISTRY_FILE)
+
     log_message("=" * 50)
     log_message("    Ekşi Sözlük Earthquake Detection System STARTED")
     log_message(f"   Polling interval: {POLL_INTERVAL} seconds")
@@ -176,7 +183,6 @@ def monitor_earthquakes():
     log_message(f"   Monitoring: {GUNDEM_URL}")
     log_message("=" * 50)
 
-    detected_earthquakes = set()  # Track already detected earthquakes to avoid duplicates
     fetch_count = 0
 
     while True:
@@ -194,13 +200,16 @@ def monitor_earthquakes():
                     pattern_match = is_earthquake_baslik(baslik['title'])
 
                     if pattern_match:
-                        # Create unique ID for this earthquake event
-                        earthquake_id = f"{pattern_match['day']}-{pattern_match['month']}-{pattern_match['year']}-{pattern_match['province']}"
+                        earthquake_id = (
+                            f"{pattern_match['day']}-{pattern_match['month']}-"
+                            f"{pattern_match['year']}-{pattern_match['province']}"
+                        )
+                        clean_url_path = baslik['url'].split('?')[0]
+                        thread_path = clean_url_path.lstrip('/')
 
-                        # Only alert if we haven't seen this earthquake before
-                        if earthquake_id not in detected_earthquakes:
-                            save_earthquake_event(baslik, pattern_match, earthquake_id)
-                            detected_earthquakes.add(earthquake_id)
+                        # Registry is the source of truth — skip if already tracked.
+                        if not registry.is_tracked(thread_path):
+                            save_earthquake_event(baslik, pattern_match, earthquake_id, registry)
 
             time.sleep(POLL_INTERVAL)
 

@@ -1,0 +1,14 @@
+# Multi-Label Text Classification Keywords
+# Format: CATEGORY_CODE | keyword1, keyword2, keyword3, ...
+# You can edit these keywords to improve classification accuracy
+
+K | vinç, apartmanı, antakya, enkaz, altında, lazım, caddesi, sokak, ses, kurtarma
+G | gıda, su, erzak, yiyecek, ekmek, mama, aç, susuz, içecek, yemek
+S | ilaç, kan, çocuk, hastası, doktor, hastane, yaralı, sağlık, tıbbi, ambulans
+B | çadır, ihtiyacı, aile, konaklama, barınak, ev, kalacak, konteyner, barınma, yer
+I | ısıtıcı, battaniye, soğuk, soba, ısınma, yakacak, donuyor, üşüme, ısı, sıcak
+Y | battaniye, kıyafet, giyim, mont, bot, eldiven, çorap, ayakkabı, kaban, palto
+H | bebek, bezi, bebek bezi, hijyen, çocuk, tuvalet, ped, temizlik, sabun, kağıt
+U | araç, istanbul, ankara, gidecek, tır, ulaşım, taşıma, araç, benzin, yakıt
+M | maddi, destek, deprem, arkadaşlar, iş, para, depremzede, yardım, iban, bağış
+F | yakıt, odun, mazot, benzin, yakacak, jeneratör, dizel, motorin, petrol, gaz
