@@ -196,6 +196,12 @@ def worker_manager_thread(registry: ThreadRegistry, stop_event: threading.Event)
 
 
 def _spawn_worker(event: EarthquakeEvent, registry: ThreadRegistry):
+    # Bug 1 fix: skip if a worker is already running for this thread
+    with worker_lock:
+        if event.thread_path in worker_handles:
+            log.info("Worker already running for %s — skipping duplicate event", event.thread_path)
+            return
+
     thread_dir = SCRAPER_DATA_DIR / event.thread_path
     thread_dir.mkdir(parents=True, exist_ok=True)
     state_file = str(thread_dir / "state.json")
@@ -214,7 +220,7 @@ def _spawn_worker(event: EarthquakeEvent, registry: ThreadRegistry):
         with worker_lock:
             worker_handles[event.thread_path] = proc
             worker_log_files[event.thread_path] = log_fh
-        registry.update(event.thread_path, worker_pid=proc.pid)
+        registry.update(event.thread_path, worker_pid=proc.pid, status=ThreadStatus.ACTIVE)
         log.info("Spawned worker for %s (PID %d)", event.thread_path, proc.pid)
     except Exception as e:
         log.error("Failed to spawn worker for %s: %s", event.thread_path, e)
@@ -233,7 +239,9 @@ def _reap_workers(registry: ThreadRegistry):
         record = registry.get(path)
         if record and record.status == ThreadStatus.ACTIVE:
             registry.update(path, status=ThreadStatus.DEAD)
-            log.warning("Worker for %s died unexpectedly (exit %d)", path, proc.returncode)
+            log.warning("Worker for %s died unexpectedly (exit %d) — re-queuing for respawn", path, proc.returncode)
+            # Bug 2 fix: re-enqueue so WorkerManager respawns it on the next cycle
+            event_queue.put(EarthquakeEvent(record.earthquake_id, path, record.url))
         else:
             log.info("Worker for %s exited cleanly", path)
 
