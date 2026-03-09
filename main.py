@@ -106,6 +106,14 @@ class DiffBatch:
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
+
+    # One-time migration: drop results table if it uses the old single-label schema
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(results)").fetchall()]
+    if cols and "top_category" in cols:
+        conn.execute("DROP TABLE results")
+        conn.commit()
+        log.info("Migrated results table to multi-label schema")
+
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS entries (
             entry_id      TEXT PRIMARY KEY,
@@ -120,7 +128,9 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS results (
             entry_id          TEXT PRIMARY KEY,
-            top_category      TEXT,      -- 'damage' | 'need' | 'other' | NULL = not yet classified
+            is_damage         INTEGER,   -- 1 = H (hasar)
+            is_need           INTEGER,   -- 1 = Y (yardım)
+            is_info           INTEGER,   -- 1 = B (bilgi)
             need_labels       TEXT,      -- JSON array e.g. ["G","S","B"]
             damage_keywords   TEXT,      -- JSON array of matched severity keywords
             extracted_address TEXT,
@@ -129,7 +139,8 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_eq_id  ON entries(earthquake_id);
-        CREATE INDEX IF NOT EXISTS idx_top_cat ON results(top_category);
+        CREATE INDEX IF NOT EXISTS idx_damage ON results(is_damage);
+        CREATE INDEX IF NOT EXISTS idx_need   ON results(is_need);
     """)
     conn.commit()
     conn.close()
@@ -266,13 +277,13 @@ def diff_watcher_thread(registry: ThreadRegistry, stop_event: threading.Event):
 # ---------------------------------------------------------------------------
 
 def _load_classifiers():
-    # Level 1 — top-level (H / Y / HY / B)
+    # Level 1 — independent binary classifiers (H / Y / B)
     top_clf = TopLevelClassifier()
     try:
         top_clf.load()
-        log.info("Top-level classifier loaded")
-    except FileNotFoundError:
-        log.warning("Top-level model not found — run: python top_level_classifier.py train <data.xlsx>")
+        log.info("Top-level classifiers loaded (H, Y, B)")
+    except FileNotFoundError as e:
+        log.warning("Top-level models not found — run: python classifiers/top_level_classifier.py train classifiers/data.xlsx\n%s", e)
         top_clf = None
 
     # Level 2a — needs (K/G/S/B/I/Y/H/U/M/F)
@@ -293,36 +304,34 @@ def _load_classifiers():
 def _classify(entry: dict, top_clf, needs_clf, damage_clf) -> dict:
     content = entry.get("content", "")
 
-    # -- Level 1: H (damage) | Y (need) | HY (both) | B (other) --
-    top_category = None
+    # -- Level 1: independent binary labels H / Y / B --
+    is_damage = is_need = is_info = 0
     if top_clf is not None:
         try:
-            top_category = top_clf.predict(content)
+            labels = top_clf.predict(content)
+            is_damage = labels["H"]
+            is_need   = labels["Y"]
+            is_info   = labels["B"]
         except Exception as e:
             log.error("Top-level classifier error: %s", e)
 
-    # Decide which L2 classifiers to run based on top-level label.
-    # HY → run both. B → run neither. None (model missing) → run both.
-    run_needs  = top_category in ("Y", "HY", None)
-    run_damage = top_category in ("H", "HY", None)
-
-    # -- Level 2a: needs --
+    # -- Level 2a: needs (run when Y=1) --
     need_labels = None
-    if run_needs:
+    if is_need:
         predictions = needs_clf.predict_single(content)
         if predictions:
             need_labels = [p["category"] for p in predictions]
 
-    # -- Level 2b: damage severity --
+    # -- Level 2b: damage keywords (run when H=1) --
     damage_keywords_found = None
-    if run_damage:
+    if is_damage:
         matched = damage_clf.get_matched_keywords(content)
         if matched:
             damage_keywords_found = matched
 
-    # -- Extractor: address (runs on anything that passed L1, skip B) --
+    # -- Extractor: address (run when any positive label) --
     extracted_address = None
-    if top_category != "B":
+    if is_damage or is_need or is_info:
         try:
             result = AddressExtractor.extract_address(content)
             if result != "ADDRESS NOT DETECTED":
@@ -331,7 +340,9 @@ def _classify(entry: dict, top_clf, needs_clf, damage_clf) -> dict:
             pass
 
     return {
-        "top_category":    top_category,
+        "is_damage":       is_damage,
+        "is_need":         is_need,
+        "is_info":         is_info,
         "need_labels":     json.dumps(need_labels, ensure_ascii=False) if need_labels else None,
         "damage_keywords": json.dumps(damage_keywords_found, ensure_ascii=False) if damage_keywords_found else None,
         "extracted_address": extracted_address,
@@ -363,11 +374,13 @@ def entry_processor_thread(stop_event: threading.Event):
                     result = _classify(entry, top_clf, needs_clf, damage_clf)
                     conn.execute(
                         """INSERT OR REPLACE INTO results
-                           (entry_id, top_category, need_labels, damage_keywords, extracted_address, processed_at)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (entry["id"], result["top_category"], result["need_labels"],
-                         result["damage_keywords"], result["extracted_address"],
-                         datetime.now().isoformat()),
+                           (entry_id, is_damage, is_need, is_info,
+                            need_labels, damage_keywords, extracted_address, processed_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (entry["id"],
+                         result["is_damage"], result["is_need"], result["is_info"],
+                         result["need_labels"], result["damage_keywords"],
+                         result["extracted_address"], datetime.now().isoformat()),
                     )
                     conn.commit()
                     processed += 1
