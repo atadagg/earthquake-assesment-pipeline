@@ -4,7 +4,8 @@ Anahtar Kelime Eşleştirme Modülü
 """
 
 import re
-from typing import List, Dict, Set, Tuple
+from collections import Counter
+from typing import Any, List, Dict, Set, Tuple
 from text_processor import TurkishTextProcessor
 
 
@@ -84,7 +85,7 @@ class KeywordMatcher:
         matches = self.match_keywords(text)
         return [kw for kw, matched in matches.items() if matched]
     
-    def categorize_text(self, text: str) -> Dict[str, any]:
+    def categorize_text(self, text: str) -> Dict[str, Any]:
         """
         Metni kategorilere ayırır ve detaylı bilgi döndürür
         
@@ -126,7 +127,7 @@ class KeywordMatcher:
         # İlerleye dönük: Kelimeleri gruplandırabilirsiniz
         return matched_keywords.copy()
     
-    def categorize_multiple_texts(self, texts: List[str]) -> List[Dict[str, any]]:
+    def categorize_multiple_texts(self, texts: List[str]) -> List[Dict[str, Any]]:
         """
         Birden fazla metni kategorize eder
         
@@ -143,7 +144,7 @@ class KeywordMatcher:
         
         return results
     
-    def get_statistics(self, texts: List[str]) -> Dict[str, any]:
+    def get_statistics(self, texts: List[str]) -> Dict[str, Any]:
         """
         Metinler üzerinde kategorizasyon istatistikleri üretir
         
@@ -153,8 +154,6 @@ class KeywordMatcher:
         Returns:
             İstatistiksel sonuçlar
         """
-        from collections import Counter
-        
         # Tüm metinleri kategorize et
         results = self.categorize_multiple_texts(texts)
         

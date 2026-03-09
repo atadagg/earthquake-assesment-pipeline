@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import queue
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -76,6 +77,7 @@ event_queue: queue.Queue   = queue.Queue()   # Detector → WorkerManager
 process_queue: queue.Queue = queue.Queue()   # DiffWatcher → EntryProcessor
 
 worker_handles: dict[str, subprocess.Popen] = {}
+worker_log_files: dict[str, object] = {}
 worker_lock = threading.Lock()
 
 
@@ -138,9 +140,9 @@ def init_db():
 # Thread 1 — Detector
 # ---------------------------------------------------------------------------
 
-def detector_thread(registry: ThreadRegistry):
+def detector_thread(registry: ThreadRegistry, stop_event: threading.Event):
     log.info("Started — polling every %ds", DETECTOR_INTERVAL)
-    while True:
+    while not stop_event.is_set():
         try:
             basliks = fetch_gundem()
             for baslik in basliks:
@@ -158,16 +160,16 @@ def detector_thread(registry: ThreadRegistry):
                     log.info("Earthquake detected: %s → %s", earthquake_id, thread_path)
         except Exception as e:
             log.error("Detector error: %s", e)
-        time.sleep(DETECTOR_INTERVAL)
+        stop_event.wait(timeout=DETECTOR_INTERVAL)
 
 
 # ---------------------------------------------------------------------------
 # Thread 2 — Worker Manager
 # ---------------------------------------------------------------------------
 
-def worker_manager_thread(registry: ThreadRegistry):
+def worker_manager_thread(registry: ThreadRegistry, stop_event: threading.Event):
     log.info("Started")
-    while True:
+    while not stop_event.is_set():
         # Drain the event queue
         while True:
             try:
@@ -179,7 +181,7 @@ def worker_manager_thread(registry: ThreadRegistry):
                 log.error("Spawn error: %s", e)
 
         _reap_workers(registry)
-        time.sleep(REAP_INTERVAL)
+        stop_event.wait(timeout=REAP_INTERVAL)
 
 
 def _spawn_worker(event: EarthquakeEvent, registry: ThreadRegistry):
@@ -191,14 +193,16 @@ def _spawn_worker(event: EarthquakeEvent, registry: ThreadRegistry):
     registry.register(event.thread_path, event.url, event.earthquake_id, str(thread_dir))
 
     try:
+        log_fh = open(thread_dir / "worker.log", "a")
         proc = subprocess.Popen(
             [sys.executable, WORKER_SCRIPT,
              event.url, state_file, output_dir, REGISTRY_FILE],
-            stdout=open(thread_dir / "worker.log", "a"),
+            stdout=log_fh,
             stderr=subprocess.STDOUT,
         )
         with worker_lock:
             worker_handles[event.thread_path] = proc
+            worker_log_files[event.thread_path] = log_fh
         registry.update(event.thread_path, worker_pid=proc.pid)
         log.info("Spawned worker for %s (PID %d)", event.thread_path, proc.pid)
     except Exception as e:
@@ -212,6 +216,9 @@ def _reap_workers(registry: ThreadRegistry):
     for path in dead:
         with worker_lock:
             proc = worker_handles.pop(path)
+            log_fh = worker_log_files.pop(path, None)
+        if log_fh:
+            log_fh.close()
         record = registry.get(path)
         if record and record.status == ThreadStatus.ACTIVE:
             registry.update(path, status=ThreadStatus.DEAD)
@@ -224,11 +231,11 @@ def _reap_workers(registry: ThreadRegistry):
 # Thread 3 — Diff Watcher
 # ---------------------------------------------------------------------------
 
-def diff_watcher_thread(registry: ThreadRegistry):
+def diff_watcher_thread(registry: ThreadRegistry, stop_event: threading.Event):
     log.info("Started — scanning every %ds", WATCH_INTERVAL)
     seen: set[str] = set()
 
-    while True:
+    while not stop_event.is_set():
         try:
             for diff_file in sorted(SCRAPER_DATA_DIR.glob("*/diffs/diff_*.json")):
                 key = str(diff_file)
@@ -242,7 +249,7 @@ def diff_watcher_thread(registry: ThreadRegistry):
                     if not new_entries:
                         continue
                     # Path structure: scrapers/<thread_path>/diffs/diff_*.json
-                    thread_path = diff_file.parts[-3]
+                    thread_path = diff_file.parent.parent.name
                     record = registry.get(thread_path)
                     earthquake_id = record.earthquake_id if record else "unknown"
                     process_queue.put(DiffBatch(diff_file, thread_path, earthquake_id, new_entries))
@@ -251,7 +258,7 @@ def diff_watcher_thread(registry: ThreadRegistry):
                     log.error("Error reading %s: %s", diff_file, e)
         except Exception as e:
             log.error("Watcher scan error: %s", e)
-        time.sleep(WATCH_INTERVAL)
+        stop_event.wait(timeout=WATCH_INTERVAL)
 
 
 # ---------------------------------------------------------------------------
@@ -331,44 +338,47 @@ def _classify(entry: dict, top_clf, needs_clf, damage_clf) -> dict:
     }
 
 
-def entry_processor_thread():
+def entry_processor_thread(stop_event: threading.Event):
     log.info("Started")
     top_clf, needs_clf, damage_clf = _load_classifiers()
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
-
-    while True:
-        try:
-            batch: DiffBatch = process_queue.get(timeout=5)
-        except queue.Empty:
-            continue
-
-        processed = 0
-        for entry in batch.entries:
+    try:
+        while not stop_event.is_set():
             try:
-                conn.execute(
-                    """INSERT OR IGNORE INTO entries
-                       (entry_id, thread_path, earthquake_id, author, timestamp, content, scraped_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (entry["id"], batch.thread_path, batch.earthquake_id,
-                     entry.get("author"), entry.get("timestamp"),
-                     entry.get("content"), entry.get("scraped_at")),
-                )
-                result = _classify(entry, top_clf, needs_clf, damage_clf)
-                conn.execute(
-                    """INSERT OR REPLACE INTO results
-                       (entry_id, top_category, need_labels, damage_keywords, extracted_address, processed_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (entry["id"], result["top_category"], result["need_labels"],
-                     result["damage_keywords"], result["extracted_address"],
-                     datetime.now().isoformat()),
-                )
-                conn.commit()
-                processed += 1
-            except Exception as e:
-                log.error("Skipping entry %s: %s", entry.get("id"), e)
+                batch: DiffBatch = process_queue.get(timeout=5)
+            except queue.Empty:
+                continue
 
-        log.info("Processed %d/%d entries from %s",
-                 processed, len(batch.entries), batch.diff_file.name)
+            processed = 0
+            for entry in batch.entries:
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO entries
+                           (entry_id, thread_path, earthquake_id, author, timestamp, content, scraped_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (entry["id"], batch.thread_path, batch.earthquake_id,
+                         entry.get("author"), entry.get("timestamp"),
+                         entry.get("content"), entry.get("scraped_at")),
+                    )
+                    result = _classify(entry, top_clf, needs_clf, damage_clf)
+                    conn.execute(
+                        """INSERT OR REPLACE INTO results
+                           (entry_id, top_category, need_labels, damage_keywords, extracted_address, processed_at)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (entry["id"], result["top_category"], result["need_labels"],
+                         result["damage_keywords"], result["extracted_address"],
+                         datetime.now().isoformat()),
+                    )
+                    conn.commit()
+                    processed += 1
+                except Exception as e:
+                    log.error("Skipping entry %s: %s", entry.get("id"), e)
+
+            log.info("Processed %d/%d entries from %s",
+                     processed, len(batch.entries), batch.diff_file.name)
+    finally:
+        conn.close()
+        log.info("DB connection closed")
 
 
 # ---------------------------------------------------------------------------
@@ -384,11 +394,24 @@ def main():
     registry = ThreadRegistry(REGISTRY_FILE)
     log.info("Registry loaded: %d known threads", len(registry.get_all()))
 
+    stop_event = threading.Event()
+
+    def _shutdown(sig, frame):
+        log.info("Signal %s — initiating graceful shutdown", sig)
+        stop_event.set()
+        with worker_lock:
+            for path, proc in worker_handles.items():
+                proc.terminate()
+                log.info("Sent SIGTERM to worker %s (PID %d)", path, proc.pid)
+
+    signal.signal(signal.SIGINT,  _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
     threads = [
-        threading.Thread(target=detector_thread,       args=(registry,), name="Detector",       daemon=True),
-        threading.Thread(target=worker_manager_thread, args=(registry,), name="WorkerManager",  daemon=True),
-        threading.Thread(target=diff_watcher_thread,   args=(registry,), name="DiffWatcher",    daemon=True),
-        threading.Thread(target=entry_processor_thread,                  name="EntryProcessor", daemon=True),
+        threading.Thread(target=detector_thread,        args=(registry, stop_event), name="Detector",       daemon=True),
+        threading.Thread(target=worker_manager_thread,  args=(registry, stop_event), name="WorkerManager",  daemon=True),
+        threading.Thread(target=diff_watcher_thread,    args=(registry, stop_event), name="DiffWatcher",    daemon=True),
+        threading.Thread(target=entry_processor_thread, args=(stop_event,),          name="EntryProcessor", daemon=True),
     ]
 
     for t in threads:
@@ -396,11 +419,11 @@ def main():
         log.info("Thread started: %s", t.name)
 
     log.info("Pipeline running — Ctrl+C to stop")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        log.info("Shutting down")
+    stop_event.wait()
+    log.info("Stopping threads...")
+    for t in threads:
+        t.join(timeout=10)
+    log.info("Shutdown complete")
 
 
 if __name__ == "__main__":
