@@ -27,3 +27,5 @@ htmlcov/
 
 # Model artifacts (large binary, regenerated via training)
 data/toplevel_model.joblib
+
+dilarawork/

@@ -14,3 +14,4 @@ openpyxl>=3.0.0
 
 # Top-level classifier (Turkish morphology)
 NlpToolkit-MorphologicalAnalysis>=1.0.51
+flask>=2.3.0
