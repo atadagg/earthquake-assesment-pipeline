@@ -4,44 +4,78 @@ from collections import defaultdict
 from pathlib import Path
 
 
-class MorphologyHelper:
-    @staticmethod
-    def get_root_primary(token: str) -> str:
-        """
-        Placeholder for your Turkish NLP morphology helper.
-        In Python, you might use a library like 'Zemberek-Python' or 'SnowballStemmer'.
-        For now, this just returns the uppercase token.
-        """
-        # A naive uppercase conversion that handles Turkish 'i' and 'ı'
-        return token.replace('i', 'İ').replace('ı', 'I').upper()
+def _tr_upper(text: str) -> str:
+    """Turkish-aware uppercase conversion."""
+    return text.replace('i', 'İ').replace('ı', 'I').upper()
 
+
+def _tr_lower(text: str) -> str:
+    """Turkish-aware lowercase conversion."""
+    return text.replace('İ', 'i').replace('I', 'ı').lower()
+
+
+def _normalize(token: str) -> str:
+    """
+    Strips common Turkish noun suffixes used in addresses so that
+    e.g. 'Ankara'dan' → 'ANKARA', 'Kadıköy'de' → 'KADIKÖY'.
+    The raw uppercase form is always tried first — suffixes are only
+    stripped when the raw form does not match a known city/district.
+    """
+    suffixes = [
+        "NİN", "NUN", "NÜN", "NIN",   # genitive
+        "NDA", "NDE",                   # locative with buffer
+        "DAN", "DEN", "TAN", "TEN",    # ablative
+        "DA", "DE", "TA", "TE",        # locative
+        "YA", "YE",                    # dative
+        "YI", "Yİ", "YU", "YÜ",       # accusative
+        "IN", "İN", "UN", "ÜN",       # genitive short
+    ]
+    upper = _tr_upper(token)
+    for suffix in suffixes:
+        if upper.endswith(suffix) and len(upper) - len(suffix) >= 3:
+            return upper[: len(upper) - len(suffix)]
+    return upper
+
+
+def _normalize_try_raw_first(token: str, cities: set, all_districts: set) -> str:
+    """
+    Returns the raw uppercase form if it matches a known city/district,
+    otherwise falls back to suffix-stripped form.
+    This prevents 'Çankaya' → 'ÇANKAY' when ÇANKAYA is a valid district.
+    """
+    upper = _tr_upper(token)
+    if upper in cities or upper in all_districts:
+        return upper
+    return _normalize(token)
 
 class AddressExtractor:
-    CITIES = set()
-    DISTRICTS = defaultdict(set)
+    CITIES: set = set()
+    DISTRICTS: defaultdict = defaultdict(set)
 
     # Regex for Neighborhood
-    MAH_REGEX = r"(?i)([a-zçğıöşüA-ZÇĞİÖŞÜ0-9\s-]{2,30}?)\s+(Mahallesi|Mah\.|Mah|Mh\.|Mh)(?![a-zçğıöşüA-ZÇĞİÖŞÜ])"
+    MAH_REGEX = r"(?i)([a-zçğıöşüA-ZÇĞİÖŞÜ0-9\s\-]{2,30}?)\s+(Mahallesi|Mah\.|Mah|Mh\.|Mh)(?![a-zçğıöşüA-ZÇĞİÖŞÜ])"
 
     # Regex for Street, Avenue, Boulevard, Apartment, Site
-    YOL_REGEX = r"(?i)([a-zçğıöşüA-ZÇĞİÖŞÜ0-9\.\s-]{2,30}?)\s+(Sokak|Sok\.|Sk\.|Sk|Caddesi|Cad\.|Cd\.|Bulvarı|Bul\.|Yolu|Apartmanı|Apt\.|Apt|Sitesi|Sit\.)(?![a-zçğıöşüA-ZÇĞİÖŞÜ])"
+    YOL_REGEX = r"(?i)([a-zçğıöşüA-ZÇĞİÖŞÜ0-9\.\s\-]{2,40})\s+(Sokak|Sok\.|Sk\.|Sk|Caddesi|Cad\.|Cd\.|Bulvarı|Bul\.|Yolu|Apartmanı|Apt\.|Apt|Sitesi|Sit\.)(?![a-zçğıöşüA-ZÇĞİÖŞÜ])"
 
-    # Regex for Door/Floor/Flat numbers
+    # Regex for Door / Floor / Flat numbers
     NO_REGEX = r"(?i)\b(No|Kapı|Daire|Kat|D\.|K\.|D:|K:)[:\.\s]*([0-9]+)"
 
     @classmethod
-    def load_turkey_data(cls, json_path: str):
+    def load_turkey_data(cls, json_path: str) -> None:
         try:
-            with open(json_path, 'r', encoding='utf-8') as f:
+            with open(json_path, "r", encoding="utf-8") as f:
                 data_array = json.load(f)
 
-            for obj in data_array:
-                # Custom upper to handle Turkish characters
-                city_name = obj.get("sehir_adi", "").replace('i', 'İ').replace('ı', 'I').upper()
-                district_name = obj.get("ilce_adi", "").replace('i', 'İ').replace('ı', 'I').upper()
+            cls.CITIES.clear()
+            cls.DISTRICTS.clear()
 
+            for obj in data_array:
+                city_name     = _tr_upper(obj.get("sehir_adi", ""))
+                district_name = _tr_upper(obj.get("ilce_adi", ""))
                 cls.CITIES.add(city_name)
                 cls.DISTRICTS[city_name].add(district_name)
+
         except FileNotFoundError:
             print(f"File not found: {json_path}")
         except json.JSONDecodeError:
@@ -49,143 +83,170 @@ class AddressExtractor:
 
     @classmethod
     def extract_address(cls, text: str) -> str:
-        # Replace newlines with spaces
-        clean_text = re.sub(r'[\r\n]+', ' ', text)
+        # Normalise whitespace / newlines
+        clean_text = re.sub(r"[\r\n]+", " ", text)
 
-        # Split by anything that isn't a Turkish or standard English letter
-        tokens = re.split(r'[^a-zA-ZçğıöşüÇĞİÖŞÜ]+', clean_text)
+        # ------------------------------------------------------------------
+        # Step 1 — Regex-based structural components (neighbourhood, street,
+        #           building number).  These are extracted first because they
+        #           are the most reliable signal and do not depend on knowing
+        #           the city/district beforehand.
+        # ------------------------------------------------------------------
+        mahalle_match = cls._regex_find_full(clean_text, cls.MAH_REGEX)
+        yollar        = cls._regex_find_all_full(clean_text, cls.YOL_REGEX)
+        no_raw        = cls._regex_find_full(clean_text, cls.NO_REGEX)
+        no_val        = cls._regex_find_group(clean_text, cls.NO_REGEX, 2)
+
+        structural_found = bool(mahalle_match or yollar)
+
+        # ------------------------------------------------------------------
+        # Step 2 — City & district detection via token scanning.
+        # ------------------------------------------------------------------
+        tokens = re.split(r"[^a-zA-ZçğıöşüÇĞİÖŞÜ]+", clean_text)
+
+        # Build a flat set of all district names for fast raw-form lookup
+        all_districts: set = {d for districts in cls.DISTRICTS.values() for d in districts}
 
         found_city = None
         found_district = None
-        address_parts = []
+        district_candidate = None
+        district_candidate_city = None
 
-        # 1. NLP-based City and District detection
         for token in tokens:
             if len(token) < 3:
                 continue
 
-            root = MorphologyHelper.get_root_primary(token)
+            # Use raw form first — only strip suffixes if raw form is unknown
+            root = _normalize_try_raw_first(token, cls.CITIES, all_districts)
 
+            # City match
             if root in cls.CITIES:
                 found_city = root
+                continue
 
-            if found_city:
-                if root in cls.DISTRICTS.get(found_city, set()):
-                    found_district = root
-            else:
+            # District candidate
+            if district_candidate is None:
                 for city, districts in cls.DISTRICTS.items():
                     if root in districts:
-                        found_district = root
-                        found_city = city
+                        district_candidate = root
+                        district_candidate_city = city
                         break
 
-        found_city_or_dist = bool(found_city or found_district)
+        # ------------------------------------------------------------------
+        # Step 3 — Validate city / district combination.
+        # ------------------------------------------------------------------
+        if district_candidate:
+            if found_city:
+                if district_candidate in cls.DISTRICTS.get(found_city, set()):
+                    found_district = district_candidate
+                # else: district belongs to a different city → drop it
+            else:
+                found_city = district_candidate_city
+                found_district = district_candidate
+
+        # ------------------------------------------------------------------
+        # Step 4 — Assemble the result parts in order:
+        #           City / District - Neighbourhood, Street, No
+        # ------------------------------------------------------------------
+        address_parts: list[str] = []
 
         if found_city:
             address_parts.append(found_city)
         if found_district:
-            # If city is already in the list, we append " / district" to the last item
-            # Otherwise, just add district
             if address_parts:
                 address_parts[-1] += f" / {found_district}"
             else:
-                address_parts.append(f" / {found_district}")
+                address_parts.append(found_district)
 
-        # 2. Regex-based Neighborhood and Street detection
-        mahalle_match = cls._regex_find_full(clean_text, cls.MAH_REGEX)
-        if cls._is_valid_match(mahalle_match, found_city_or_dist):
+        # Neighbourhood
+        if mahalle_match and cls._is_valid_match(mahalle_match, bool(found_city or found_district), structural_found):
             address_parts.append(f"- {mahalle_match}")
 
-        yollar = cls._regex_find_all_full(clean_text, cls.YOL_REGEX)
+        # Streets / roads / buildings
         for yol in yollar:
-            if cls._is_valid_match(yol, found_city_or_dist):
+            if cls._is_valid_match(yol, bool(found_city or found_district), structural_found):
                 address_parts.append(yol)
 
-        # 3. Number Filtering
-        no_raw = cls._regex_find_full(clean_text, cls.NO_REGEX)
-        no_val = cls._regex_find_group(clean_text, cls.NO_REGEX, 2)
-
+        # Door / flat number
         if no_raw and cls._is_valid_number(no_val):
             address_parts.append(no_raw)
 
-        # Construct final string
-        # Java used StringBuilder, we'll join our parts with comma spaces
-        # Note: formatting slightly depends on how the Java string builder concatenated
-        # Java did: City / District - Neighborhood, Street, No: 15
-
-        result_builder = ""
+        # ------------------------------------------------------------------
+        # Step 5 — Build the final string
+        # ------------------------------------------------------------------
+        result = ""
         for i, part in enumerate(address_parts):
             if i == 0:
-                result_builder += part
+                result += part
             elif part.startswith("- "):
-                result_builder += f" {part}"
+                result += f" {part}"
             else:
-                result_builder += f", {part}"
+                result += f", {part}"
 
-        # Return error if result is too short or only contains "No"
-        if len(result_builder) < 3 or re.match(r'^, No.*', result_builder):
+        if len(result) < 3 or re.match(r"^, No.*", result):
             return "ADDRESS NOT DETECTED"
 
-        return result_builder
+        return result
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _is_valid_number(number_obj: str) -> bool:
-        if not number_obj:
+    def _is_valid_number(number_str: str) -> bool:
+        if not number_str:
             return False
         try:
-            num = int(number_obj)
-
-            # Rule 1: Starts with 0
-            if number_obj.startswith("0"):
+            int(number_str)
+            if number_str.startswith("0"):
                 return False
-
-            # Rule 2: Longer than 4 digits
-            if len(number_obj) > 4:
+            if len(number_str) > 4:
                 return False
-
             return True
         except ValueError:
             return False
 
     @staticmethod
-    def _is_valid_match(match: str, city_found: bool) -> bool:
+    def _is_valid_match(match: str, city_found: bool, structural_found: bool) -> bool:
+        """
+        Accept a regex match if:
+        - it does not contain noise words
+        - a city/district was found (high confidence), OR
+        - at least one other structural component was found (neighbourhood/street), OR
+        - the match itself is short (≤ 4 words) to avoid false positives
+        """
         if not match:
             return False
 
-        # Custom lowercase to handle Turkish characters safely
-        lower_match = match.replace('İ', 'i').replace('I', 'ı').lower()
-
-        # Filter out irrelevant keywords
+        lower = _tr_lower(match)
         invalid_keywords = ["muhtar", "yardım", "resmi", "bilgi"]
-        if any(keyword in lower_match for keyword in invalid_keywords):
+        if any(kw in lower for kw in invalid_keywords):
             return False
 
-        if city_found:
+        if city_found or structural_found:
             return True
 
-        if len(match.split()) > 4:
-            return False
-
-        return True
+        return len(match.split()) <= 4
 
     @staticmethod
-    def _regex_find_full(text: str, regex: str) -> str:
-        match = re.search(regex, text)
-        return match.group(0).strip() if match else None
+    def _regex_find_full(text: str, regex: str):
+        m = re.search(regex, text)
+        return m.group(0).strip() if m else None
 
     @staticmethod
-    def _regex_find_group(text: str, regex: str, group_index: int) -> str:
-        match = re.search(regex, text)
+    def _regex_find_group(text: str, regex: str, group_index: int):
+        m = re.search(regex, text)
+        if not m:
+            return None
         try:
-            return match.group(group_index).strip() if match else None
+            return m.group(group_index).strip()
         except IndexError:
             return None
 
     @staticmethod
     def _regex_find_all_full(text: str, regex: str) -> list:
-        # re.finditer is used to get the full match strings like Matcher.find() in Java
-        return [match.group(0).strip() for match in re.finditer(regex, text)]
+        return [m.group(0).strip() for m in re.finditer(regex, text)]
 
 
-# Initialize the data just like the static { loadTurkeyData(...) } block in Java
+# Load data on module import
 AddressExtractor.load_turkey_data(str(Path(__file__).parent / "turkiye.json"))
