@@ -1,27 +1,17 @@
 """
-Deprem Verileri Kategorizasyon Sistemi
+Damage keyword utilities used by the main pipeline.
 
-Bu paket, deprem sonrası Ekşi Sözlük'ten çekilen verileri
-10 anahtar kelimeye göre kategorilendirmek için araçlar içerir.
+Runtime uses:
+- KeywordLoader.load_from_file("classifiers/damage/keywords.txt")
+- KeywordMatcher(...).get_matched_keywords(text)
 """
 
-__version__ = "1.0.0"
-__author__ = "Kerem"
-__description__ = "Deprem Verileri Kategorizasyon Sistemi"
-
-from .text_processor import TurkishTextProcessor, process_text, split_to_sentences, extract_words
-from .keyword_matcher import KeywordMatcher, KeywordLoader, create_matcher_from_file, create_matcher_from_list
-from .categorize_earthquake_data import EarthquakeDataCategorizer
+from .keyword_matcher import KeywordMatcher, KeywordLoader
+from .text_processor import TurkishTextProcessor
 
 __all__ = [
-    'TurkishTextProcessor',
-    'KeywordMatcher',
-    'KeywordLoader',
-    'EarthquakeDataCategorizer',
-    'process_text',
-    'split_to_sentences',
-    'extract_words',
-    'create_matcher_from_file',
-    'create_matcher_from_list'
+    "TurkishTextProcessor",
+    "KeywordMatcher",
+    "KeywordLoader",
 ]
 

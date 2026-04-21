@@ -4,6 +4,8 @@ import threading
 import json
 import sys
 from pathlib import Path
+import os
+import traceback
 
 # Add project root to path securely and import necessary parts
 sys.path.insert(0, str(Path(__file__).parent))
@@ -16,15 +18,92 @@ class EarthquakeTesterUI(tk.Tk):
         super().__init__()
         self.title("Earthquake Pipeline Direct Tester")
         self.geometry("900x600")
+
+        # If anything goes wrong during UI build, surface it clearly (otherwise Tk can look like a blank grey window).
+        def _tk_report_callback_exception(exc, val, tb):
+            print("UI ERROR (callback):", exc, val, file=sys.stderr)
+            traceback.print_tb(tb)
+        self.report_callback_exception = _tk_report_callback_exception
+
+        # A small visible marker so we can confirm widgets are rendering at all.
+        self._debug_label = tk.Label(self, text="UI initializing...", fg="white", bg="#444")
+        self._debug_label.place(x=10, y=10)
+
+        # macOS: make sure the window is brought to front and ttk widgets render reliably.
+        # Some system Tk builds can show an empty-looking window unless we force a theme and lift.
+        try:
+            style = ttk.Style()
+            # Prefer a theme that exists on most Tk builds.
+            for candidate in ("aqua", "clam", "default"):
+                if candidate in style.theme_names():
+                    style.theme_use(candidate)
+                    break
+        except Exception:
+            pass
+
+        # Suppress Tk deprecation warning if user wants it.
+        # (No-op unless env var is set; keeps behavior explicit.)
+        os.environ.setdefault("TK_SILENCE_DEPRECATION", os.environ.get("TK_SILENCE_DEPRECATION", ""))
         
-        # Preload classifiers to be ready
-        self.top_clf, self.needs_clf, self.damage_clf = main._load_classifiers()
-        
+        # Classifiers are loaded in background to avoid a blank/grey window on macOS
+        # before Tk enters the event loop.
+        self.top_clf = None
+        self.needs_clf = None
+        self.damage_clf = None
+        self.classifiers_loaded = False
+
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=10)
         
         self._build_url_tab()
         self._build_gundem_tab()
+
+        # Force window to the front after widgets are created.
+        self.after(50, self._bring_to_front)
+        self.after(100, lambda: self._debug_label.config(text="UI hazır. Classifier yükleniyor..."))
+        self.after(120, self._start_classifier_load)
+
+    def _bring_to_front(self):
+        try:
+            self.update_idletasks()
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            # Temporarily set topmost to ensure visibility, then restore.
+            self.attributes("-topmost", True)
+            self.after(150, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
+
+    def _start_classifier_load(self):
+        # Ensure the window paints at least once before doing heavier work.
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
+        threading.Thread(target=self._load_classifiers_bg, daemon=True).start()
+
+    def _load_classifiers_bg(self):
+        try:
+            top, needs, damage = main._load_classifiers()
+            self.top_clf, self.needs_clf, self.damage_clf = top, needs, damage
+            self.classifiers_loaded = True
+            self.after(0, self._on_classifiers_ready)
+        except Exception as e:
+            self.after(0, lambda: self._on_classifiers_failed(e))
+
+    def _on_classifiers_ready(self):
+        # Note: top_clf may be None if TF-IDF models are not trained yet. That's OK:
+        # pipeline will still run keyword-based components.
+        self._debug_label.config(text="Classifier yüklendi. URL test hazır.")
+        try:
+            self.test_btn.config(state="normal")
+        except Exception:
+            pass
+
+    def _on_classifiers_failed(self, e: Exception):
+        self._debug_label.config(text="Classifier yüklenemedi (terminal loguna bak).")
+        messagebox.showerror("Classifier Load Error", str(e))
         
     def _build_url_tab(self):
         tab_frame = ttk.Frame(self.notebook)
@@ -39,7 +118,7 @@ class EarthquakeTesterUI(tk.Tk):
         self.url_entry.pack(side='left', fill='x', expand=True, padx=5)
         self.url_entry.insert(0, "https://eksisozluk.com/30-mart-2026-mersindeki-yaya-gecidi-kazasi--8088071")
         
-        self.test_btn = ttk.Button(input_frame, text="Test URL", command=self.on_test_url)
+        self.test_btn = ttk.Button(input_frame, text="Test URL", command=self.on_test_url, state="disabled")
         self.test_btn.pack(side='right', padx=5)
         
         # Results Frame
@@ -139,6 +218,8 @@ class EarthquakeTesterUI(tk.Tk):
             
             # 2. Classify each
             for entry in entries:
+                if not self.classifiers_loaded or self.needs_clf is None or self.damage_clf is None:
+                    raise RuntimeError("Classifier'lar henüz yüklenmedi. Lütfen biraz bekleyip tekrar deneyin.")
                 result = main._classify(entry, self.top_clf, self.needs_clf, self.damage_clf)
                 
                 labels = []

@@ -6,7 +6,7 @@ Anahtar Kelime Eşleştirme Modülü
 import re
 from collections import Counter
 from typing import Any, List, Dict, Set, Tuple
-from text_processor import TurkishTextProcessor
+from .text_processor import TurkishTextProcessor
 
 
 class KeywordMatcher:

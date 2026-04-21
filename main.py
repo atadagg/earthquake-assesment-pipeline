@@ -29,17 +29,15 @@ from typing import Optional
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "detector"))
-sys.path.insert(0, str(ROOT / "classifiers"))
-sys.path.insert(0, str(ROOT / "classifiers" / "damage"))
 sys.path.insert(0, str(ROOT / "extractors"))
 
 from thread_registry import ThreadRegistry, ThreadStatus
 from earthquake_patterns import is_earthquake_baslik
 from earthquake_detector import fetch_gundem
-from needs_classifier import KeywordClassifier
-from keyword_matcher import KeywordMatcher, KeywordLoader
+from classifiers.needs_classifier import KeywordClassifier
+from classifiers.damage.keyword_matcher import KeywordMatcher, KeywordLoader
 from address_extractor import AddressExtractor
-from top_level_classifier import TopLevelClassifier
+from classifiers.top_level_classifier import TopLevelClassifier
 
 # ---------------------------------------------------------------------------
 # Paths & config
