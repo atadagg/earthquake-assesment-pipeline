@@ -30,14 +30,15 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "detector"))
 sys.path.insert(0, str(ROOT / "extractors"))
+sys.path.insert(0, str(ROOT / "need"))
 
 from thread_registry import ThreadRegistry, ThreadStatus
 from earthquake_patterns import is_earthquake_baslik
 from earthquake_detector import fetch_gundem
-from classifiers.needs_classifier import KeywordClassifier
-from classifiers.damage.keyword_matcher import KeywordMatcher, KeywordLoader
+from method4_bert import BertNeedsClassifier
+from bert_damage_classifier import BertDamageClassifier
 from address_extractor import AddressExtractor
-from classifiers.top_level_classifier import TopLevelClassifier
+from bert_top_level_classifier import BertTopLevelClassifier
 
 # ---------------------------------------------------------------------------
 # Paths & config
@@ -283,24 +284,20 @@ def diff_watcher_thread(registry: ThreadRegistry, stop_event: threading.Event):
 # ---------------------------------------------------------------------------
 
 def _load_classifiers():
-    # Level 1 — independent binary classifiers (H / Y / B)
-    top_clf = TopLevelClassifier()
+    # Level 1 — BERT binary classifiers (H / Y / B)
+    top_clf = BertTopLevelClassifier()
     try:
         top_clf.load()
-        log.info("Top-level classifiers loaded (H, Y, B)")
+        log.info("BERT top-level classifiers loaded (H, Y, B)")
     except FileNotFoundError as e:
-        log.warning("Top-level models not found — run: python classifiers/top_level_classifier.py train classifiers/data.xlsx\n%s", e)
+        log.warning("BERT models not found — place tamDepremBert_H/Y/B folders in data/\n%s", e)
         top_clf = None
 
     # Level 2a — needs (K/G/S/B/I/Y/H/U/M/F)
-    needs_clf = KeywordClassifier(
-        keywords_file=str(ROOT / "classifiers" / "category_keywords.txt"),
-        threshold=1,
-    )
+    needs_clf = BertNeedsClassifier(model_dir=str(ROOT / "need" / "models" / "bert"))
 
-    # Level 2b — damage severity keywords
-    damage_keywords = KeywordLoader.load_from_file(str(ROOT / "classifiers" / "damage" / "keywords.txt"))
-    damage_clf = KeywordMatcher(damage_keywords)
+    # Level 2b — BERT damage severity classifier (AH / ÇH / OH)
+    damage_clf = BertDamageClassifier()
 
     AddressExtractor.load_turkey_data(str(ROOT / "extractors" / "turkiye.json"))
     log.info("All classifiers and extractor loaded")
