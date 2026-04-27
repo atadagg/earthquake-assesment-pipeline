@@ -31,5 +31,7 @@ htmlcov/
 
 # Model artifacts (large binary, regenerated via training)
 data/toplevel_model.joblib
+classifiers/*.zip
+need/models/bert/best_model.pt
 
 dilarawork/

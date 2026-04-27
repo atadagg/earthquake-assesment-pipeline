@@ -28,6 +28,8 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "classifiers"))
+sys.path.insert(0, str(ROOT / "classifiers" / "damage"))
 sys.path.insert(0, str(ROOT / "detector"))
 sys.path.insert(0, str(ROOT / "extractors"))
 sys.path.insert(0, str(ROOT / "need"))
