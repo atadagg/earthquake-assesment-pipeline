@@ -144,6 +144,8 @@ if __name__ == "__main__":
         "Lütfen yardım edin çok korkuyorum",
     ]
 
+    print("Insert Google API Key to see the coordinates")
+
     for text in test_texts:
         print(f"INPUT : {text}")
         result = AddressExtractor.extract_address(text)
