@@ -8,12 +8,13 @@ Usage:
     print(result)
 """
 
+import os
 import requests
 from transformers import pipeline
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
-NER_MODEL_DIR  = "./ner_model"          # path to your copied model folder
+NER_MODEL_DIR  = os.path.join(os.path.dirname(__file__), "ner_model")
 GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"  # replace with your key
 GEOCODE_URL    = "https://maps.googleapis.com/maps/api/geocode/json"
 FIELD_ORDER    = ["IL", "ILCE", "MAHALLE", "SOKAK", "APARTMAN", "BINA", "DAIRE", "POI"]
