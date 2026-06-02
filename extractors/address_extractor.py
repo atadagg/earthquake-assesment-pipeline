@@ -14,8 +14,23 @@ from transformers import pipeline
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 
+# Zero-dependency .env loader
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOTENV_PATH = os.path.join(ROOT_DIR, ".env")
+if os.path.exists(DOTENV_PATH):
+    try:
+        with open(DOTENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                os.environ[k.strip()] = v.strip()
+    except Exception:
+        pass
+
 NER_MODEL_DIR  = os.path.join(os.path.dirname(__file__), "ner_model")
-GOOGLE_API_KEY = "YOUR_GOOGLE_API_KEY"  # replace with your key
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY") or "YOUR_GOOGLE_API_KEY"
 GEOCODE_URL    = "https://maps.googleapis.com/maps/api/geocode/json"
 FIELD_ORDER    = ["IL", "ILCE", "MAHALLE", "SOKAK", "APARTMAN", "BINA", "DAIRE", "POI"]
 
@@ -113,10 +128,24 @@ class AddressExtractor:
         nlp = cls._get_nlp()
 
         raw_entities = nlp(text)
-        entities = [
-            {"entity": e["entity_group"], "value": e["word"]}
-            for e in raw_entities
-        ]
+        entities = []
+        for e in raw_entities:
+            word = e["word"].strip()
+            group = e["entity_group"]
+            if not word:
+                continue
+            
+            # Robustly handle WordPiece tokenizer subword markings (##)
+            if word.startswith("##"):
+                clean_subword = word.lstrip("#")
+                if entities:
+                    entities[-1]["value"] += clean_subword
+                else:
+                    entities.append({"entity": group, "value": clean_subword})
+            else:
+                if word.replace("#", "") == "":
+                    continue
+                entities.append({"entity": group, "value": word})
 
         addresses = cls._entities_to_addresses(entities)
 
@@ -125,12 +154,30 @@ class AddressExtractor:
 
         lines = []
         for address in addresses:
+            # Post-process cleanup of address string (remove leftover subword markers, fix punctuation/spaces)
+            address = address.replace("##", "").replace(" ,", ",").strip()
+            address = " ".join(address.split())
+            if not address:
+                continue
+
+            # Skip address fragments that are too short to be meaningful and failed geocoding
+            if len(address) < 6 and " " not in address:
+                continue
+
             geo = cls._geocode(address)
             if geo["lat"] is not None:
-                line = f"{geo['formatted']} | LAT: {geo['lat']} | LNG: {geo['lng']}"
+                # Use the raw extracted address to preserve neighborhood/street details from NER,
+                # but use geocoding for precise coordinates.
+                line = f"{address} | LAT: {geo['lat']} | LNG: {geo['lng']}"
             else:
+                # If geocoding failed, check if the raw address is long enough to be useful
+                if len(address) < 6:
+                    continue
                 line = f"{address} | LAT: N/A | LNG: N/A"
             lines.append(line)
+
+        if not lines:
+            return "No address found."
 
         return "\n".join(lines)
 

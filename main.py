@@ -292,8 +292,15 @@ def _load_classifiers():
         top_clf.load()
         log.info("BERT top-level classifiers loaded (H, Y, B)")
     except FileNotFoundError as e:
-        log.warning("BERT models not found — place tamDepremBert_H/Y/B folders in data/\n%s", e)
-        top_clf = None
+        log.warning("BERT models not found — falling back to TF-IDF TopLevelClassifier.\n%s", e)
+        try:
+            from top_level_classifier import TopLevelClassifier
+            top_clf = TopLevelClassifier()
+            top_clf.load()
+            log.info("TF-IDF fallback top-level classifiers loaded successfully (model_H.joblib, model_Y.joblib, model_B.joblib)")
+        except Exception as ex:
+            log.error("Failed to load TF-IDF fallback classifiers: %s", ex)
+            top_clf = None
 
     # Level 2a — needs (K/G/S/B/I/Y/H/U/M/F)
     needs_clf = BertNeedsClassifier(model_dir=str(ROOT / "need" / "models" / "bert"))
@@ -301,7 +308,9 @@ def _load_classifiers():
     # Level 2b — BERT damage severity classifier (AH / ÇH / OH)
     damage_clf = BertDamageClassifier()
 
-    AddressExtractor.load_turkey_data(str(ROOT / "extractors" / "turkiye.json"))
+    # AddressExtractor has no load_turkey_data in extractors/address_extractor.py yet;
+    # turkiye.json gazetteer hook reserved for future integration.
+    # AddressExtractor.load_turkey_data(str(ROOT / "extractors" / "turkiye.json"))
     log.info("All classifiers and extractor loaded")
     return top_clf, needs_clf, damage_clf
 

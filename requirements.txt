@@ -16,5 +16,8 @@ openpyxl>=3.0.0
 NlpToolkit-MorphologicalAnalysis>=1.0.51
 flask>=2.3.0
 
-# Test UI (web)
-streamlit>=1.35.0
+# API Backend (React frontend)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+websockets>=12.0

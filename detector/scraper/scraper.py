@@ -142,10 +142,33 @@ def extract_entries_from_page(soup: BeautifulSoup) -> List[Dict]:
 
 
 def build_page_urls(base_url: str, page_count: int) -> List[str]:
-    """Generate list of URLs for all pages."""
+    """Generate list of URLs for all pages, handling existing query parameters."""
     if page_count == 1:
         return [base_url]
-    return [f"{base_url}?p={page}" for page in range(1, page_count + 1)]
+    
+    import urllib.parse as urlparse
+    parsed = urlparse.urlparse(base_url)
+    qd = urlparse.parse_qs(parsed.query)
+    qd.pop('p', None) # remove existing page param to prevent duplicate/invalid query strings
+    
+    # Rebuild URL without the 'p' parameter
+    query_str = urlparse.urlencode(qd, doseq=True)
+    clean_url = urlparse.urlunparse((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        parsed.params,
+        query_str,
+        parsed.fragment
+    ))
+    
+    urls = []
+    for page in range(1, page_count + 1):
+        if query_str:
+            urls.append(f"{clean_url}&p={page}")
+        else:
+            urls.append(f"{clean_url}?p={page}")
+    return urls
 
 
 # ============================================================================
@@ -377,9 +400,9 @@ def scrape_page(url: str, headers: Dict[str, str]) -> Tuple[List[Dict], bool]:
     return entries, True
 
 
-def scrape_all_pages(base_url: str, headers: Dict[str, str]) -> Tuple[List[Dict], Dict]:
+def scrape_all_pages(base_url: str, headers: Dict[str, str], max_entries: Optional[int] = None) -> Tuple[List[Dict], Dict]:
     """
-    Scrape all pages of a thread.
+    Scrape pages of a thread (up to max_entries if specified).
     Returns (entries, metadata) where metadata includes failure info.
     """
     metadata = {
@@ -391,8 +414,21 @@ def scrape_all_pages(base_url: str, headers: Dict[str, str]) -> Tuple[List[Dict]
         'end_time': None
     }
 
-    # Fetch first page to get page count
-    html = fetch_html_with_retry(base_url, headers)
+    # Fetch first page to get page count and resolve canonical/redirected URL
+    html = None
+    try:
+        scraper = cloudscraper.create_scraper()
+        res = scraper.get(base_url, timeout=REQUEST_TIMEOUT)
+        res.raise_for_status()
+        html = res.text
+        # Resolve canonical URL to handle thread redirections/merges
+        if res.url and res.url != base_url:
+            print(f"URL redirected from {base_url} to canonical {res.url}", file=sys.stderr)
+            base_url = res.url
+    except Exception as e:
+        print(f"Initial get failed, falling back to retry: {e}", file=sys.stderr)
+        html = fetch_html_with_retry(base_url, headers)
+
     if not html:
         metadata['end_time'] = datetime.now().isoformat()
         return [], metadata
@@ -408,6 +444,9 @@ def scrape_all_pages(base_url: str, headers: Dict[str, str]) -> Tuple[List[Dict]
 
     all_entries = []
     for i, url in enumerate(urls, 1):
+        if max_entries is not None and len(all_entries) >= max_entries:
+            print(f"Reached max_entries limit ({max_entries}). Stopping scrape.", file=sys.stderr)
+            break
         print(f"Scraping page {i}/{page_count}...", file=sys.stderr)
         entries, success = scrape_page(url, headers)
 

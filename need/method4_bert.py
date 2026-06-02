@@ -6,6 +6,8 @@ Adds a linear classification head with BCEWithLogitsLoss.
 Saves the best checkpoint to need/models/bert/.
 """
 
+from __future__ import annotations
+
 import sys
 import numpy as np
 import torch

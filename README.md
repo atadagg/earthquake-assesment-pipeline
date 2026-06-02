@@ -37,8 +37,10 @@ Designed to deliver structured situational-awareness data to emergency-response 
 
 ## Installation
 
+Requires **Python 3.9+**. Modules that use PEP 604 union syntax (`str | None`, etc.) include `from __future__ import annotations` so those hints work on 3.9 without upgrading the interpreter.
+
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 ```
 
 ---

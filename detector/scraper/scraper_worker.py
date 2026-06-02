@@ -9,6 +9,8 @@ Usage:
     python scraper_worker.py <url> <state_file> <output_dir> [registry_file]
 """
 
+from __future__ import annotations
+
 import json
 import os
 import signal
