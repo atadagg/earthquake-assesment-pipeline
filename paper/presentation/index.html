@@ -1,0 +1,584 @@
+<title>Signal After the Shock</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#eef1f4;
+  --surface:#ffffff;
+  --surface-2:#e1e6ec;
+  --ink:#161a22;
+  --ink-soft:#454c5c;
+  --muted:#78808f;
+  --line:#d2d8e0;
+  --accent:#33507c;
+  --accent-soft:#d9e2ee;
+  --accent2:#5c7a4f;
+  --accent2-soft:#dfe7d6;
+  --danger:#a34437;
+  --shadow: 0 1px 0 rgba(22,26,34,0.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151b;
+    --surface:#181c24;
+    --surface-2:#1e232c;
+    --ink:#e7eaef;
+    --ink-soft:#aeb4c0;
+    --muted:#767e8d;
+    --line:#2a3038;
+    --accent:#7fa0d6;
+    --accent-soft:#243250;
+    --accent2:#93b483;
+    --accent2-soft:#25301f;
+    --danger:#d97a63;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151b;
+  --surface:#181c24;
+  --surface-2:#1e232c;
+  --ink:#e7eaef;
+  --ink-soft:#aeb4c0;
+  --muted:#767e8d;
+  --line:#2a3038;
+  --accent:#7fa0d6;
+  --accent-soft:#243250;
+  --accent2:#93b483;
+  --accent2-soft:#25301f;
+  --danger:#d97a63;
+  --shadow: 0 1px 0 rgba(0,0,0,0.4);
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:'IBM Plex Sans', system-ui, sans-serif;
+  scroll-snap-type:y proximity;
+  overflow-y:scroll;
+  height:100vh;
+}
+::selection{ background:var(--accent-soft); color:var(--ink); }
+
+h1,h2,h3{ font-family:'Instrument Serif', Georgia, serif; font-weight:400; text-wrap:balance; margin:0; }
+.mono{ font-family:'IBM Plex Mono', ui-monospace, monospace; }
+.eyebrow{
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.72rem;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:var(--accent);
+  display:flex;
+  align-items:center;
+  gap:0.6em;
+}
+.eyebrow::before{
+  content:"";
+  width:7px;height:7px;border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+
+/* ---- timing rail ---- */
+#rail{
+  position:fixed; top:0; right:0; height:100vh; width:5px;
+  background:var(--line); z-index:50;
+}
+#rail-fill{
+  position:absolute; top:0; left:0; width:100%; height:0%;
+  background:var(--accent);
+  transition:height .1s linear;
+}
+#clock{
+  position:fixed; bottom:18px; right:22px; z-index:50;
+  font-family:'IBM Plex Mono', monospace; font-size:0.78rem;
+  color:var(--muted); background:var(--surface);
+  border:1px solid var(--line); padding:6px 10px; border-radius:6px;
+  box-shadow:var(--shadow);
+  display:flex; gap:10px; align-items:center;
+}
+#clock b{ color:var(--ink); font-weight:600; }
+#navhint{
+  position:fixed; bottom:18px; left:22px; z-index:50;
+  font-family:'IBM Plex Mono', monospace; font-size:0.7rem;
+  color:var(--muted);
+}
+#jump{
+  position:fixed; top:18px; left:22px; z-index:50;
+  font-family:'IBM Plex Mono', monospace; font-size:0.72rem;
+}
+#jump a{ color:var(--muted); text-decoration:none; border-bottom:1px dotted var(--muted); }
+#jump a:hover{ color:var(--accent); border-color:var(--accent); }
+
+/* ---- slide frame ---- */
+.slide{
+  scroll-snap-align:start;
+  min-height:100vh;
+  width:100%;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  padding:6vh 8vw 8vh 8vw;
+  position:relative;
+  border-bottom:1px solid var(--line);
+}
+.slide-index{
+  position:absolute; top:5vh; right:8vw;
+  font-family:'IBM Plex Mono', monospace;
+  font-size:0.75rem; color:var(--muted);
+  text-align:right;
+}
+.slide-index .t{ color:var(--accent); display:block; }
+
+.slide h2{ font-size:clamp(2rem, 4vw, 3.1rem); margin:0.3em 0 0.5em; color:var(--ink); }
+.slide .sub{ font-size:1.05rem; color:var(--ink-soft); max-width:62ch; margin-bottom:1.6em; }
+
+.content{ display:grid; gap:2.4rem; }
+.two-col{ grid-template-columns:1.1fr 0.9fr; align-items:start; }
+@media (max-width:900px){ .two-col{ grid-template-columns:1fr; } }
+
+ul.points{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:1.1rem; max-width:60ch; }
+ul.points li{
+  padding-left:1.4em; position:relative; font-size:1.08rem; line-height:1.5; color:var(--ink);
+}
+ul.points li::before{
+  content:"—"; position:absolute; left:0; color:var(--accent); font-weight:600;
+}
+ul.points b{ color:var(--ink); font-weight:600; }
+ul.points .note{ display:block; color:var(--muted); font-size:0.92rem; margin-top:0.2em; }
+
+.speaker{
+  margin-top:2.2rem; padding:1rem 1.2rem; background:var(--surface);
+  border:1px solid var(--line); border-left:3px solid var(--accent2);
+  border-radius:4px; max-width:66ch; box-shadow:var(--shadow);
+}
+.speaker .lbl{ font-family:'IBM Plex Mono',monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--accent2); margin-bottom:0.4em; display:block;}
+.speaker p{ margin:0; color:var(--ink-soft); font-size:0.94rem; line-height:1.55; }
+
+/* stat tiles */
+.stats{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.stat{ background:var(--surface); padding:1.3rem 1.4rem; }
+.stat .n{ font-family:'IBM Plex Mono',monospace; font-size:2rem; font-weight:600; color:var(--accent); font-variant-numeric:tabular-nums; }
+.stat .l{ font-size:0.82rem; color:var(--muted); margin-top:0.3em; }
+
+/* taxonomy codes */
+.codes{ display:flex; flex-wrap:wrap; gap:0.6rem; }
+.code{
+  font-family:'IBM Plex Mono',monospace; font-size:0.85rem; font-weight:600;
+  padding:0.4em 0.7em; border-radius:5px; background:var(--surface-2);
+  border:1px solid var(--line); color:var(--ink);
+  display:flex; align-items:center; gap:0.5em;
+}
+.code .k{ color:var(--accent); }
+
+/* pipeline diagram */
+.pipe{ display:flex; align-items:stretch; gap:0; overflow-x:auto; padding-bottom:0.5rem; }
+.pipe-step{
+  flex:1 0 150px; background:var(--surface); border:1px solid var(--line);
+  border-radius:8px; padding:1rem 1.1rem; position:relative; margin-right:1.6rem;
+}
+.pipe-step:last-child{ margin-right:0; }
+.pipe-step::after{
+  content:"→"; position:absolute; right:-1.5rem; top:50%; transform:translateY(-50%);
+  color:var(--muted); font-size:1.1rem;
+}
+.pipe-step:last-child::after{ display:none; }
+.pipe-step .tag{ font-family:'IBM Plex Mono',monospace; font-size:0.68rem; color:var(--accent2); text-transform:uppercase; letter-spacing:0.08em; }
+.pipe-step h4{ margin:0.35em 0 0.35em; font-size:1.02rem; font-weight:600; font-family:'IBM Plex Sans'; }
+.pipe-step p{ margin:0; font-size:0.82rem; color:var(--muted); line-height:1.4; }
+
+/* table */
+table.results{ border-collapse:collapse; width:100%; max-width:640px; font-family:'IBM Plex Mono', monospace; font-size:0.88rem; }
+table.results th, table.results td{ text-align:left; padding:0.55em 1em 0.55em 0; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+table.results th{ color:var(--muted); font-weight:500; font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; }
+table.results td.hi{ color:var(--accent); font-weight:600; }
+table.results tr.best td{ color:var(--ink); font-weight:600; }
+
+.bar-row{ display:flex; align-items:center; gap:0.8rem; margin-bottom:0.65rem; }
+.bar-row .name{ width:120px; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--ink-soft); flex-shrink:0; }
+.bar-track{ flex:1; background:var(--surface-2); border-radius:3px; height:14px; position:relative; }
+.bar-fill{ height:100%; border-radius:3px; background:var(--muted); }
+.bar-fill.best{ background:var(--accent); }
+.bar-val{ font-family:'IBM Plex Mono',monospace; font-size:0.78rem; width:52px; text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
+
+.quote-line{ font-family:'Instrument Serif', serif; font-style:italic; font-size:1.5rem; color:var(--ink-soft); max-width:52ch; line-height:1.4; }
+
+.title-slide{ justify-content:center; align-items:flex-start; }
+.title-slide .kicker{ font-family:'IBM Plex Mono',monospace; font-size:0.8rem; letter-spacing:0.16em; text-transform:uppercase; color:var(--accent); margin-bottom:1.4rem; }
+.title-slide h1{ font-size:clamp(2.6rem,6vw,4.6rem); line-height:1.05; max-width:16ch; }
+.title-slide .authors{ margin-top:2.2rem; color:var(--ink-soft); font-size:1rem; display:flex; flex-direction:column; gap:0.25rem; }
+.title-slide .authors .adv{ color:var(--muted); font-size:0.88rem; margin-top:0.4rem;}
+.title-slide .seis{ position:absolute; bottom:0; left:0; width:100%; height:90px; opacity:0.55; }
+
+.final .big{ font-family:'Instrument Serif', serif; font-size:clamp(2.4rem,5vw,4rem); color:var(--ink); max-width:14ch; }
+
+/* ---- script appendix ---- */
+#script{
+  background:var(--surface-2);
+  padding:8vh 8vw 12vh;
+}
+#script h2.script-title{ font-size:clamp(1.8rem,3vw,2.4rem); margin-bottom:0.3em; }
+#script .script-sub{ color:var(--muted); font-size:0.9rem; margin-bottom:3rem; max-width:60ch; }
+.script-entry{
+  max-width:72ch; margin-bottom:2.6rem; padding-bottom:2.6rem;
+  border-bottom:1px solid var(--line);
+}
+.script-entry:last-child{ border-bottom:none; }
+.script-head{ display:flex; align-items:baseline; gap:0.8rem; margin-bottom:0.6rem; flex-wrap:wrap; }
+.script-head .num{ font-family:'IBM Plex Mono',monospace; color:var(--accent); font-size:0.85rem; font-weight:600; }
+.script-head h3{ font-family:'IBM Plex Sans'; font-size:1.15rem; font-weight:600; margin:0; }
+.script-head .time{ font-family:'IBM Plex Mono',monospace; color:var(--muted); font-size:0.78rem; margin-left:auto; }
+.script-body{ font-size:1rem; line-height:1.7; color:var(--ink-soft); }
+.script-body[contenteditable="true"]{ outline:none; }
+.script-body[contenteditable="true"]:focus{ background:var(--surface); border-radius:4px; padding:0.3em 0.5em; margin:-0.3em -0.5em; }
+
+@media print{
+  @page{ size: 1280px 720px; margin:0; }
+  html,body{ height:auto; overflow:visible; scroll-snap-type:none; background:var(--bg); }
+  #rail,#clock,#navhint,#jump{ display:none; }
+  #script{ display:none; }
+  .speaker{ display:none; }
+  .slide{
+    break-after:page; break-inside:avoid;
+    width:1280px; height:720px; min-height:720px; max-height:720px;
+    padding:60px 100px; border-bottom:none; margin:0 auto;
+  }
+}
+</style>
+
+<div id="rail"><div id="rail-fill"></div></div>
+<div id="clock">elapsed <b id="clockval">0:00</b> / 12:00</div>
+<div id="navhint">scroll or ↓ to advance</div>
+<div id="jump"><a href="#script">↓ full speaker script</a></div>
+
+<!-- 1 : TITLE -->
+<section class="slide title-slide" data-t="0">
+  <div class="kicker">CS402 · Committee Presentation · 12 min</div>
+  <h1>Earthquake Damage Assessment &amp; Assistance Needs via Social Media</h1>
+  <div class="authors">
+    <span>Ata Tan Dağıdır · Kutay Mumcu · Kerem Kaya</span>
+    <span>Department of Computer Science, Özyeğin University</span>
+    <span class="adv">Advisor: Prof. Olcay Taner Yıldız</span>
+  </div>
+  <svg class="seis" viewBox="0 0 1000 90" preserveAspectRatio="none">
+    <polyline points="0,45 80,45 100,15 120,75 140,45 260,45 280,20 300,70 320,45 460,45 480,10 505,80 530,45 700,45 715,25 735,60 755,45 1000,45"
+      fill="none" stroke="var(--accent)" stroke-width="2" opacity="0.8"/>
+  </svg>
+</section>
+
+<!-- 2 : PROBLEM -->
+<section class="slide" data-t="45">
+  <div class="slide-index"><span class="t">0:45–1:30</span>02 / 13</div>
+  <div class="eyebrow">The Problem</div>
+  <h2>The infrastructure you need<br>is the infrastructure that fell.</h2>
+  <div class="content two-col">
+    <ul class="points">
+      <li><b>Kahramanmaraş, Feb 2023</b> — cell towers down, roads impassable, official reporting stalled for hours.<span class="note">Field teams still had to mobilise and survey by hand.</span></li>
+      <li>In that window, coordinators allocate scarce resources with <b>no verified ground truth</b>.</li>
+      <li>Citizens post anyway — <b>before</b> any formal assessment is possible.</li>
+    </ul>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>Open on the gap, not the tech. Every minute of delay in that first assessment window is a resource-allocation decision made blind.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 3 : GAP / RELATED WORK -->
+<section class="slide" data-t="90">
+  <div class="slide-index"><span class="t">1:30–2:15</span>03 / 13</div>
+  <div class="eyebrow">Why This Gap, Specifically</div>
+  <h2>Social media as first responder —<br>but not in Turkish, and not live.</h2>
+  <div class="content two-col">
+    <ul class="points">
+      <li>Twitter damage-signal work is established: Ridgecrest, Australian floods, disaster imagery — posts correlate with severity and surface local needs.</li>
+      <li>Almost all of it is <b>single-platform, English-language, post-hoc</b>.</li>
+      <li>Turkish is agglutinative — sparse token space breaks standard NER/classification assumptions. Prior Turkish NER work is morphology-aware but never applied to <b>live disaster response</b>.</li>
+    </ul>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>This is the sentence to land: "no prior work applies these methods to Turkish social media in a real-time earthquake-relief context." That's the gap we filled.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 : DATA SOURCE -->
+<section class="slide" data-t="135">
+  <div class="slide-index"><span class="t">2:15–3:15</span>04 / 13</div>
+  <div class="eyebrow">Data Source</div>
+  <h2>Ekşi Sözlük: a forum with editorial gates</h2>
+  <div class="content two-col">
+    <ul class="points">
+      <li>Since 1999. Authorship requires <b>approved sample entries</b> — a real barrier most social platforms don't have.</li>
+      <li>Enforced Turkish orthography, but a mandatory <b>all-lowercase</b> convention that breaks capitalisation-based NER heuristics.</li>
+      <li>Twitter/X API pricing made live monitoring at scale a non-starter for this project.</li>
+      <li>6 Feb 2023 main thread: <b>760</b> entries in hour one, <b>4,260</b> in 24h. Relief-coordination thread: <b>10,000+</b> in a week.</li>
+    </ul>
+    <div class="quote-line">"more grammatically regular than the latter, yet far from a solved NLP problem"</div>
+  </div>
+</section>
+
+<!-- 5 : CORPUS + TAXONOMY -->
+<section class="slide" data-t="195">
+  <div class="slide-index"><span class="t">3:15–4:15</span>05 / 13</div>
+  <div class="eyebrow">Corpus &amp; Label Taxonomy</div>
+  <h2>Five earthquakes, two decades, one taxonomy built bottom-up</h2>
+  <div class="content">
+    <div class="stats">
+      <div class="stat"><div class="n">18,628</div><div class="l">entries scraped, 5 events</div></div>
+      <div class="stat"><div class="n">8,222</div><div class="l">labelled entries</div></div>
+      <div class="stat"><div class="n">~90%</div><div class="l">from Kahramanmaraş 2023</div></div>
+      <div class="stat"><div class="n">34.5</div><div class="l">mean tokens / entry</div></div>
+    </div>
+    <div>
+      <div class="codes">
+        <span class="code"><span class="k">H</span> Damage</span>
+        <span class="code"><span class="k">Y</span> Help request</span>
+        <span class="code"><span class="k">B</span> General info</span>
+        <span class="code"><span class="k">N</span> Not relevant</span>
+        <span class="code"><span class="k">ÇH/OH/AH</span> severity</span>
+        <span class="code"><span class="k">11×</span> need-type labels</span>
+      </div>
+      <div class="speaker" style="margin-top:1.4rem">
+        <span class="lbl">Say</span>
+        <p>2003 Bingöl → 2011 Van → 2020 Elazığ → 2020 Aegean → 2023 Kahramanmaraş. Taxonomy came from reading entries, not a top-down design — that's why compound labels like HY exist.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 6 : PIPELINE ARCHITECTURE -->
+<section class="slide" data-t="255">
+  <div class="slide-index"><span class="t">4:15–5:45</span>06 / 13</div>
+  <div class="eyebrow">System Architecture</div>
+  <h2>Four daemon threads, one live pipeline</h2>
+  <div class="content">
+    <div class="pipe">
+      <div class="pipe-step"><span class="tag">detector</span><h4>Poll gündem</h4><p>Every 30s. Regex matches date + province + "deprem".</p></div>
+      <div class="pipe-step"><span class="tag">worker mgr</span><h4>Spawn scrapers</h4><p>One subprocess/thread. Auto-respawn on crash.</p></div>
+      <div class="pipe-step"><span class="tag">scraper</span><h4>Diff &amp; write</h4><p>cloudscraper + BeautifulSoup. Incremental JSON diffs.</p></div>
+      <div class="pipe-step"><span class="tag">processor</span><h4>Classify + NER</h4><p>Cascade: top-level → need → severity → address.</p></div>
+      <div class="pipe-step"><span class="tag">dashboard</span><h4>Partner dashboard</h4><p>FastAPI + React; geocoded entries feed table &amp; map views, built for AFAD handoff.</p></div>
+    </div>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>Detection to dashboard happens without a human in the loop. A shared thread registry prevents the same earthquake from being double-scraped.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 7 : METHODOLOGY -->
+<section class="slide" data-t="345">
+  <div class="slide-index"><span class="t">5:45–7:00</span>07 / 13</div>
+  <div class="eyebrow">Methodology</div>
+  <h2>A cascade of fine-tuned Turkish BERTs</h2>
+  <div class="content two-col">
+    <ul class="points">
+      <li><b>Top-level (H/Y/B):</b> three independent binary classifiers, not one softmax — lets an entry carry compound labels like <span class="mono">HY</span>.</li>
+      <li><b>Need-type:</b> one multi-label head, 11 logits, BCE loss — rescue and food/water can both fire.</li>
+      <li><b>Severity:</b> also fine-tuned, same recipe — benchmarked against keyword and BM25 baselines just like need-type, and it wins where they collapse: OH (moderate) has just 6 test samples.</li>
+      <li><b>Address NER:</b> token classification over 8 span types, segmented into multiple addresses per entry, resolved via Google geocoding.</li>
+    </ul>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>Backbone throughout: dbmdz/bert-base-turkish-cased. Same recipe everywhere — 128 tokens, batch 16, AdamW, lr 2e-5, 5 epochs.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 8 : BASELINES RATIONALE -->
+<section class="slide" data-t="420">
+  <div class="slide-index"><span class="t">7:00–7:45</span>08 / 13</div>
+  <div class="eyebrow">Justifying the Cost of Fine-Tuning</div>
+  <h2>Was BERT worth it over something cheaper?</h2>
+  <div class="content">
+    <ul class="points" style="max-width:70ch">
+      <li>Benchmarked need-type <i>and</i> severity classification against <b>keyword matching</b> and <b>BM25 retrieval</b>; need-type also against <b>zero-shot Claude Haiku</b> — same protocol, same test split.</li>
+      <li>Framed as a direct question to the committee: is a fine-tuned transformer defensible for an 11-category task at this data volume?</li>
+    </ul>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>Answer's on the next two slides — but flag the question here so the results land as an answer, not just a number.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 9 : RESULTS 1 -->
+<section class="slide" data-t="465">
+  <div class="slide-index"><span class="t">7:45–8:45</span>09 / 13</div>
+  <div class="eyebrow">Results — Top-Level &amp; Severity</div>
+  <h2>96.0% accuracy, 91.9% macro-F1</h2>
+  <div class="content two-col">
+    <table class="results">
+      <tr><th>Classifier</th><th>Acc.</th><th>Prec.</th><th>Rec.</th><th>F1</th></tr>
+      <tr><td>H — damage</td><td>97.5%</td><td>94.3%</td><td>92.7%</td><td class="hi">93.5%</td></tr>
+      <tr><td>Y — help req.</td><td>95.1%</td><td>85.8%</td><td>85.2%</td><td class="hi">85.5%</td></tr>
+      <tr><td>B — gen. info</td><td>95.2%</td><td>82.6%</td><td>77.2%</td><td class="hi">79.8%</td></tr>
+    </table>
+    <div>
+      <div class="bar-row"><span class="name">Keywords</span><div class="bar-track"><div class="bar-fill" style="width:55.9%"></div></div><span class="bar-val">55.9%</span></div>
+      <div class="bar-row"><span class="name">BM25</span><div class="bar-track"><div class="bar-fill" style="width:84.8%"></div></div><span class="bar-val">84.8%</span></div>
+      <div class="bar-row"><span class="name">Fine-tuned BERT</span><div class="bar-track"><div class="bar-fill best" style="width:90.4%"></div></div><span class="bar-val">90.4%</span></div>
+      <div class="speaker" style="margin-top:1rem">
+        <span class="lbl">Say</span>
+        <p>Severity accuracy (bars) looks close between BM25 and BERT — but macro-F1 tells the real story: BM25 gets 39.0%, BERT gets 82.5%. OH (moderate) has just 6 samples; lexical methods can't cope.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 : RESULTS 2 -->
+<section class="slide" data-t="525">
+  <div class="slide-index"><span class="t">8:45–9:45</span>10 / 13</div>
+  <div class="eyebrow">Results — Need-Type &amp; Address</div>
+  <h2>Fine-tuning beats a zero-shot LLM by 6.5 F1 points</h2>
+  <div class="content two-col">
+    <div>
+      <div class="bar-row"><span class="name">Keyword</span><div class="bar-track"><div class="bar-fill" style="width:31.0%"></div></div><span class="bar-val">31.0%</span></div>
+      <div class="bar-row"><span class="name">BM25</span><div class="bar-track"><div class="bar-fill" style="width:31.0%"></div></div><span class="bar-val">31.0%</span></div>
+      <div class="bar-row"><span class="name">Claude Haiku</span><div class="bar-track"><div class="bar-fill" style="width:69.4%"></div></div><span class="bar-val">69.4%</span></div>
+      <div class="bar-row"><span class="name">Fine-tuned BERT</span><div class="bar-track"><div class="bar-fill best" style="width:75.9%"></div></div><span class="bar-val">75.9%</span></div>
+      <p style="font-size:0.8rem;color:var(--muted);margin-top:0.6rem">micro-F1, 11-category multi-label</p>
+    </div>
+    <ul class="points">
+      <li>Address NER: <b>79.5%</b> precision, <b>88.7%</b> recall, <b>83.3%</b> span-F1.</li>
+      <li>Quality tracks the data: 2023 authors gave street + building + floor; earlier events gave city/district only.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 11 : DISCUSSION -->
+<section class="slide" data-t="585">
+  <div class="slide-index"><span class="t">9:45–10:45</span>11 / 13</div>
+  <div class="eyebrow">Discussion</div>
+  <h2>The hard part isn't the language.<br>It's the label boundary.</h2>
+  <div class="content two-col">
+    <ul class="points">
+      <li>A zero-shot LLM already recovers most of the need-type signal — so the text isn't unreadable.</li>
+      <li>BERT's edge is learning <b>overlapping category boundaries</b> that even human annotators contest.</li>
+      <li>Address extraction is bounded by <b>annotation coverage</b>, not model capacity — it degrades exactly where street-level detail is absent.</li>
+    </ul>
+    <div class="speaker">
+      <span class="lbl">Say</span>
+      <p>This reframes the limitation as a data problem the committee can act on, not a modelling dead end.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 12 : CONCLUSION -->
+<section class="slide final" data-t="645">
+  <div class="slide-index"><span class="t">10:45–11:30</span>12 / 13</div>
+  <div class="eyebrow">Conclusion &amp; Future Work</div>
+  <div class="big">Operational today. Two clear next steps.</div>
+  <div class="content two-col" style="margin-top:1.6rem">
+    <ul class="points">
+      <li>Detects seismic events within seconds, classifies and address-tags continuously, surfaced on a live dashboard built for AFAD handoff.<span class="note">Access controls and KVKK-compliant data-sharing land before that handoff.</span></li>
+      <li><b>Turkish disaster WordNet</b> — extends KeNet with domain vocabulary, benefits both classification and NER.</li>
+      <li><b>Broaden address annotation</b> beyond 2023-style entries to smaller, sparser events.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 13 : QUESTIONS -->
+<section class="slide title-slide" data-t="690">
+  <div class="kicker">End of presentation · 11:30</div>
+  <h1 style="font-size:clamp(3rem,8vw,6rem)">Questions?</h1>
+  <div class="authors">
+    <span>tan.dagidir · kutay.mumcu · kerem.kaya @ozu.edu.tr</span>
+  </div>
+</section>
+
+<!-- FULL SPEAKER SCRIPT -->
+<section id="script">
+  <h2 class="script-title">Full speaker script</h2>
+  <p class="script-sub">Word-for-word draft, timed at ~150 wpm to the same budget as the slides. Edit any paragraph directly — it's <span class="mono">contenteditable</span>, and your edits persist for this browser session (not saved to the file; copy out anything you want to keep). Say it in your own words on stage; this is a memorization aid, not a script to read.</p>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">01</span><h3>Title</h3><span class="time">0:00–0:45</span></div>
+    <div class="script-body" contenteditable="true">Good morning. I'm Ata Tan Dağıdır, presenting joint work with Kutay Mumcu and Kerem Kaya, advised by Prof. Olcay Taner Yıldız. Our project asks a simple question: when an earthquake hits Turkey, can we turn the flood of social media posts into structured, actionable relief information — automatically, within seconds of the event? We built an end-to-end pipeline that does exactly that on Ekşi Sözlük, a major Turkish discussion platform, and I'll walk you through why we chose this problem, how the system works, and what our evaluation shows.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">02</span><h3>The Problem</h3><span class="time">0:45–1:30</span></div>
+    <div class="script-body" contenteditable="true">Turkey is among the most seismically active countries in the world, and February 2023 made the stakes obvious again. The core problem is that the infrastructure you need to assess damage is often the same infrastructure the earthquake destroys — cell towers collapse, roads become impassable, and official reporting channels stall for hours. Field teams still have to mobilize and survey manually before any structured picture emerges. In that window, coordinators are allocating scarce resources — food, rescue teams, medical supplies — with no verified ground truth. Meanwhile, citizens are already posting: damage reports, rescue pleas, addresses, all before any formal assessment is possible.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">03</span><h3>Why This Gap</h3><span class="time">1:30–2:15</span></div>
+    <div class="script-body" contenteditable="true">This isn't a new observation — prior work on Twitter data from the Ridgecrest earthquake, Australian floods, and disaster imagery has shown social media posts correlate strongly with damage severity and can surface localized needs at scale. But almost all of that work is single-platform, English-language, and analyzed after the fact. Turkish adds a real technical obstacle: it's agglutinative, so a single word can carry the information of several English words, which breaks standard tokenization and NER assumptions. Prior Turkish NER work handles the morphology, but none of it has been applied to a live, real-time disaster-relief setting. That's the gap this project fills.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">04</span><h3>Data Source</h3><span class="time">2:15–3:15</span></div>
+    <div class="script-body" contenteditable="true">We built this on Ekşi Sözlük, not Twitter — for two practical reasons. First, the Twitter API's pricing makes real-time monitoring at research scale a non-starter. Second, Ekşi Sözlük has something unusual for social media: an editorial gate. To become an author, you submit sample entries that get reviewed and approved, and once you're in, you're expected to follow standard Turkish spelling and grammar. That produces noticeably cleaner text than Twitter's abbreviation-heavy, code-switched style. It's not a solved NLP problem though — the platform enforces all-lowercase writing, which breaks capitalization-based NER heuristics, and posts are still informal, emotionally raw, and full of internet slang. And the platform's responsiveness is real: the main thread for the February 2023 earthquake got 760 entries in the first hour, 4,260 within 24 hours, and a dedicated relief-coordination thread passed 10,000 entries within a week.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">05</span><h3>Corpus &amp; Taxonomy</h3><span class="time">3:15–4:15</span></div>
+    <div class="script-body" contenteditable="true">We scraped complete entry histories for five Turkish earthquakes spanning two decades — 2003 Bingöl, 2011 Van, 2020 Elazığ, 2020 Aegean Sea, and the 2023 Kahramanmaraş events — 18,628 entries total, of which 8,222 were labeled; the 2023 event alone makes up about 90 percent of the labeled data. The label taxonomy wasn't designed top-down — it emerged from actually reading entries during annotation. At the top level: H for damage, Y for help request, B for general information, N for not relevant. H entries get a severity sub-label — severe, moderate, or minor — and Y entries get one or more of eleven need-type labels like rescue, food and water, shelter, or medical. Because entries can be compound — a damage report that's also a rescue plea — we allow combined labels like HY rather than forcing a single category.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">06</span><h3>Pipeline Architecture</h3><span class="time">4:15–5:45</span></div>
+    <div class="script-body" contenteditable="true">The system runs as four daemon threads coordinated by one orchestrator, talking through in-memory queues and a shared database, so nothing blocks anything else. The Detector polls Ekşi Sözlük's trending-topics page every 30 seconds and matches thread titles against a pattern that recognizes the platform's earthquake-naming convention — a date, a Turkish month, and one of the 81 provinces. When it finds a new event, it checks a shared thread registry to avoid double-tracking, then hands it to the Worker Manager, which spawns a dedicated scraper subprocess — and automatically respawns it if it crashes. Each scraper gets past Ekşi Sözlük's Cloudflare protection, parses entries, and writes only the incremental diff since the last scrape, so I/O scales with new activity, not total thread size. A Diff Watcher scans for new diff files every 10 seconds and hands batches to the Entry Processor, which runs the classification cascade — top-level category, then need-type, then severity, then address extraction — and writes results transactionally to SQLite. A FastAPI backend and React frontend expose all of that on a live dashboard with table and map views over the geocoded entries, updating continuously as results come in — built as the operational handoff point we're offering to AFAD, with access control and KVKK-compliant data-sharing as the next layer before that handoff.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">07</span><h3>Methodology</h3><span class="time">5:45–7:00</span></div>
+    <div class="script-body" contenteditable="true">Every learned component in this cascade is a fine-tuned instance of dbmdz's Turkish BERT. Top-level classification is three independent binary classifiers — one each for H, Y, and B — rather than a single softmax over four classes. That choice is deliberate: it lets one entry activate more than one label at once, which is exactly what we need for compound entries like HY. Need-type classification is a single multi-label model instead — one linear head producing eleven logits, trained with binary cross-entropy, so an entry can simultaneously flag rescue and food and water. Damage severity uses the same fine-tuned recipe as the rest, classifying AH, ÇH, and OH. We benchmarked it against a curated keyword matcher and BM25 retrieval, same as need-type, and the gap matters most on the rarest class: OH has only six examples in the entire test set, and lexical methods can't generalize from that, while the fine-tuned model still holds. Address extraction is a separate token-classification BERT tagging eight span types — province down to point-of-interest — which we then validate against a gazetteer and geocode.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">08</span><h3>Baseline Rationale</h3><span class="time">7:00–7:45</span></div>
+    <div class="script-body" contenteditable="true">Fine-tuning a transformer isn't free, so before committing to it — for damage severity and for the eleven-category need-type task — we asked whether it was actually worth the cost. For both, we benchmarked against a manually curated keyword matcher and BM25 retrieval on the exact same held-out test split; for need-type specifically, we added a third baseline: zero-shot prompting of Claude Haiku with the category definitions in the prompt. I want to frame this explicitly as a question for the committee: is a fine-tuned transformer defensible here, or would a cheaper method have done just as well? The next two slides answer that.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">09</span><h3>Results — Top-Level &amp; Severity</h3><span class="time">7:45–8:45</span></div>
+    <div class="script-body" contenteditable="true">On the primary H/Y/B classification, we get 96.0 percent accuracy and 91.9 percent macro-F1 across the three independent classifiers — damage detection is strongest at 93.5 F1, general information is hardest at 79.8, mostly because it's the vaguest category. For damage severity, accuracy alone is a bit misleading: BM25 retrieval looks competitive at 84.8 percent accuracy versus BERT's 90.4, but macro-F1 tells the real story — BM25 collapses to 39.0 percent while BERT holds at 82.5. The reason is class imbalance: the moderate-severity class has only six examples in the entire test set, and a lexical method simply can't generalize from that, while the fine-tuned model still captures the pattern.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">10</span><h3>Results — Need-Type &amp; Address</h3><span class="time">8:45–9:45</span></div>
+    <div class="script-body" contenteditable="true">For the harder eleven-category need-type task, keyword matching and BM25 both stick at 31.0 percent micro-F1, zero-shot Claude Haiku reaches 69.4, and our fine-tuned BERT tops out at 75.9 — a 6.5-point gain over a general-purpose LLM with no domain adaptation, and a 44-point gain over the lexical methods. That's the answer to the question from the last slide: fine-tuning earns its cost specifically on the categories that overlap or require inference, which lexical methods can't touch and even a strong LLM only partially resolves. For address extraction, the NER model reaches 79.5 percent precision, 88.7 percent recall, and 83.3 F1 at the span level — with quality tracking the data directly: 2023 entries came with street names and building numbers, earlier events mostly gave city or district only.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">11</span><h3>Discussion</h3><span class="time">9:45–10:45</span></div>
+    <div class="script-body" contenteditable="true">The most interesting result here isn't a number, it's what the comparison implies. A zero-shot LLM already recovers most of the need-type signal, which tells us the text itself isn't linguistically hard to read — it's not a parsing problem. What fine-tuning buys us is learning the boundaries between overlapping categories, distinctions that even our own human annotators disagreed on during labeling. Lexical and retrieval methods do far worse than both, which says those category boundaries are contextual and implicit, not surface-vocabulary patterns you can catch with keywords. Address extraction tells a different story: its ceiling isn't model capacity, it's annotation coverage — performance degrades in a very predictable way, exactly on the events where authors never wrote street-level detail in the first place.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">12</span><h3>Conclusion</h3><span class="time">10:45–11:30</span></div>
+    <div class="script-body" contenteditable="true">To close: this pipeline is operational, not a proof of concept — it detects seismic events within seconds, classifies and address-tags entries continuously, and surfaces all of it on a live dashboard we're offering as the operational handoff point to AFAD, with access control and KVKK-compliant data-sharing as the layer we add before that handoff. The results confirm that domain adaptation is worth its cost over lexical and zero-shot alternatives, even in a resource-constrained language like Turkish. The most significant limitation isn't the model, it's the taxonomy — at eleven need-type categories, inter-annotator agreement plateaus regardless of training data volume. Our two next steps are building a Turkish earthquake-specific WordNet, and expanding address annotation to cover smaller, geographically sparser events.</div>
+  </div>
+
+  <div class="script-entry">
+    <div class="script-head"><span class="num">13</span><h3>Questions</h3><span class="time">11:30–12:00</span></div>
+    <div class="script-body" contenteditable="true">Thank you — happy to take questions.</div>
+  </div>
+</section>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var fill = document.getElementById('rail-fill');
+  var clock = document.getElementById('clockval');
+  function fmt(s){ s=Math.max(0,Math.round(s)); var m=Math.floor(s/60), r=s%60; return m+':' + (r<10?'0':'')+r; }
+  function onScroll(){
+    var doc = document.documentElement;
+    var scrolled = doc.scrollTop;
+    var max = doc.scrollHeight - doc.clientHeight;
+    var pct = max>0 ? scrolled/max : 0;
+    fill.style.height = (pct*100)+'%';
+    var vh = window.innerHeight;
+    var idx = Math.min(slides.length-1, Math.round(scrolled/vh));
+    var cur = parseFloat(slides[idx].dataset.t || 0);
+    clock.textContent = fmt(cur);
+  }
+  document.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+})();
+</script>
